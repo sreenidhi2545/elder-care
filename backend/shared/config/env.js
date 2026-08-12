@@ -58,4 +58,12 @@ export const config = Object.freeze({
   refreshTokenTtlDays: Number(process.env.REFRESH_TOKEN_TTL_DAYS) || 30,
   jwtIssuer: 'eldercare',
   bcryptRounds: 12,
+
+  // Country assumed when someone types a bare national number with no country
+  // code. Configurable rather than hard-coded so serving another country later
+  // is a settings change, not a code change. Numbers already written in
+  // international form (+... or 00...) are accepted for any country regardless
+  // of what these say. See shared/phone.js.
+  defaultCallingCode: (process.env.DEFAULT_CALLING_CODE || '91').replace(/^\+/, ''),
+  defaultNationalDigits: Number(process.env.DEFAULT_NATIONAL_DIGITS) || 10,
 });

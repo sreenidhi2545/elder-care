@@ -146,23 +146,44 @@ The `promoted@test.eldercare.local` admin account was deleted from the developme
 
 The stale copies of `WORK_DIVISION.md` and `ElderCare_Work_Division.docx` outside the repository were deleted, so there is one copy of that document and it is the one under version control.
 
+### Phone numbers normalised to E.164 — closes the open issue above
+
+Done before the Expo shell, deliberately: the rule has to exist before the registration screen is written against it, and migrating accounts is trivial now and awkward once real people have signed up.
+
+**The problem:** `users.phone` is UNIQUE on the exact string it was given. Registration accepted `9876543210`, `+919876543210` and `919876543210` as three different values, so one person could create three accounts and then fail to log in with whichever format they did not use that day.
+
+**The decision:** normalise on the server, in one place, and apply it to registration and login identically. `backend/shared/phone.js` reduces every accepted way of writing a number to `+<country code><national number>` — digits only.
+
+The alternatives considered:
+
+- **Validate strictly and reject anything that is not already E.164.** Rejected: it pushes the problem onto every screen and onto the user, and a number pasted from a phone's contacts list very often carries spaces or brackets. Being strict about storage and forgiving about input is the better split.
+- **Normalise in the mobile app instead.** Rejected: two implementations of the same rule drift, and the moment they disagree the two ends disagree about which account a number belongs to. The server is the only place that can be authoritative. `API.md` tells the screens not to normalise.
+- **Use libphonenumber.** Rejected for now: it carries the numbering plans of every country in the world at a cost of several megabytes, to solve a problem that today is one country. The module's header says to swap it in rather than grow a country table by hand if the product ever ships outside India.
+
+**Where the default country lives:** `DEFAULT_CALLING_CODE` and `DEFAULT_NATIONAL_DIGITS` in configuration, defaulting to `91` and `10`, not constants in the code. More importantly, any number already written in international form — starting `+` or `00` — is accepted as it stands for any country. `+14155552671` and `+442071838750` both pass today. The default country only decides what a *bare* national number means, so nothing here has to be unpicked to serve a second country later.
+
+**What it accepts.** Verified against the running server: `9876543210`, `09876543210` (trunk prefix), `919876543210`, `+919876543210`, `+91 98765 43210`, `+91-98765-43210`, `(98765) 43210` and `0091 9876543210` all reduce to `+919876543210`. Registering the first created one account; the other formats then returned `409 account_exists` rather than making a second. Logging in with any of the seven returned the same user id. `12345`, `98765432101` and `abcdefghij` are rejected with `validation_failed`.
+
+**Migration.** `backend/scripts/normalize-phones.js` rewrites existing rows, importing the same `normalizePhone` so the migration cannot drift from the running rule. It is a dry run by default and needs `--apply` to write, because it rewrites the column every account is identified by. It refuses to write anything if two rows would reduce to the same number — that means one person registered twice and a human has to decide which row survives; the UNIQUE constraint would have caught it, but only one clash at a time.
+
+Run against the development database, it reported **3 rows examined, 3 already canonical, 0 rewritten, 0 collisions**. The three test accounts were already stored with a `+` prefix, so the migration was a no-op for them. Teammates should still run it once against their own databases, where locally created test rows may not be.
+
+**Left open:** those three test accounts are `+91990000001` and similar — nine national digits, so not real Indian numbers. They pass because a number already in international form is accepted at face value for any country, and enforcing a national-number length for every country is exactly the job that needs libphonenumber. Harmless for test data; worth knowing if someone wonders why an obviously wrong number was allowed.
+
 ---
 
 ## Open issues
 
 Things known to be wrong or undecided. Each should be closed before the work that depends on it starts.
 
-### Phone numbers are not normalised — resolve before the registration screen is built
+### Closed
 
-`+919876543210` and `919876543210` are stored as two different accounts. The `users.phone` column is UNIQUE on the exact string, and registration accepts either form, so the same person can register twice and then fail to log in with the form they did not use. The same problem applies to spaces and hyphens if the input field ever allows them.
+- **Phone numbers not normalised** — closed 2026-08-12. Normalised to E.164 in `backend/shared/phone.js`, applied by both `validateRegister` and `validateLogin`, documented in `API.md`, existing rows migrated. See the entry above.
 
-This has to be settled before Teammate C builds the registration screen, because whichever rule is chosen has to be applied identically on the screen and in the backend, and any accounts created in the meantime will be in whatever format they were typed.
+### Open
 
-The likely fix is to normalise to E.164 (`+91` prefix, no spaces or punctuation) in `validateRegister` and `validateLogin` so the stored form is always the same, with the screen showing the country code as a fixed prefix rather than leaving it to the user to type. Whether to normalise the existing rows as well is a small migration and currently trivial — there are three test accounts.
-
-### Other open items
-
-- **No tests.** Every verification so far has been manual `curl` against a running server. Nothing catches a regression automatically.
+- **`emergency_contacts.phone` is not normalised yet.** The table is empty, so there is nothing to migrate, but Phase 1 must run contact numbers through `normalizePhone` when it starts writing them — otherwise the same duplicate problem reappears on a table where a duplicate means someone gets called twice and someone else not at all.
+- **No tests.** Every verification so far has been manual `curl` against a running server. Nothing catches a regression automatically. `shared/phone.js` is the first piece of pure logic in the codebase with enough branches to be worth unit tests, and it is the natural place to start.
 - **No mobile app.** Phase 0 steps 4 and 5 — the Expo shell and the login and registration screens — are the remaining work, and there is no frontend code at all yet.
 - **No admin account** in the development database, so the admin-only endpoint cannot be tested until one is promoted.
 - **`JWT_SECRET` length is only a warning, not a startup failure.** Acceptable in development; it must not reach a deployment that way.

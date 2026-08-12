@@ -74,7 +74,36 @@ Two kinds of token are issued together, and they are not interchangeable:
 
 **Phone is the login identity.** Email is optional — an account can be registered without one, and many elderly users will not have one. Login accepts either a phone number or an email address; if both are sent, phone is used.
 
-Phone format: 7–15 digits, optionally prefixed with `+`. Store and send it in one consistent form (`+919876543210`) — `+919876543210` and `919876543210` are two different accounts as far as the database is concerned.
+#### Phone number format
+
+**Stored form: E.164** — a `+`, the country code, then the national number, digits only, no spaces or punctuation. For example `+919876543210`. This is what `user.phone` contains in every response, and what the screens should display.
+
+**Sent form: whatever the user typed.** The backend normalises the number before it looks anything up, so the app does not have to. All of these reach the same account:
+
+| Sent | Normalised to |
+|---|---|
+| `9876543210` | `+919876543210` |
+| `09876543210` | `+919876543210` |
+| `919876543210` | `+919876543210` |
+| `+919876543210` | `+919876543210` |
+| `+91 98765 43210` | `+919876543210` |
+| `+91-98765-43210` | `+919876543210` |
+| `0091 9876543210` | `+919876543210` |
+
+The rules, in the order they are applied:
+
+1. Spaces, hyphens, brackets and dots are stripped.
+2. A leading `00` is treated as `+`.
+3. A number starting with `+` is taken at its word, whatever country it belongs to — `+14155552671` and `+442071838750` are both accepted.
+4. A number with no country code is assumed to be Indian: exactly 10 digits, or 11 with the leading `0` trunk prefix, gets `+91`.
+5. Twelve digits beginning `91` get a `+`.
+6. Anything else is rejected with `validation_failed`.
+
+The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_DIGITS`), not a constant, so serving another country later does not need a code change.
+
+**What the registration screen should do:** show the country code as a fixed `+91` prefix beside a 10-digit field rather than leaving the user to type it. The backend accepts the other formats as a safety net for numbers pasted from a contacts list or typed by someone used to writing them differently — not as an invitation to leave the field free-form.
+
+**Do not normalise in the app as well.** One implementation, on the server, is what keeps the two ends from ever disagreeing about which account a number belongs to.
 
 ### Roles
 
@@ -133,7 +162,7 @@ Creates an account and logs it in immediately — the response includes tokens, 
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
-| `phone` | string | **yes** | 7–15 digits, optional leading `+` |
+| `phone` | string | **yes** | Any accepted format — see [Phone number format](#phone-number-format). Stored as E.164 |
 | `password` | string | **yes** | At least 8 characters, at most 72 bytes |
 | `fullName` | string | **yes** | 1–120 characters |
 | `role` | string | **yes** | `elderly`, `family` or `caregiver` |
@@ -190,7 +219,7 @@ The 72-byte password ceiling is bcrypt's limit — beyond it the tail is silentl
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
-| `phone` | string | one of the two | 7–15 digits, optional leading `+` |
+| `phone` | string | one of the two | Any accepted format — normalised the same way registration does |
 | `email` | string | one of the two | Case-insensitive |
 | `password` | string | **yes** | |
 | `deviceLabel` | string | no | Shown on the active-sessions screen |

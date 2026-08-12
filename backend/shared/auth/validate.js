@@ -8,6 +8,7 @@
 // ============================================================================
 
 import { badRequest } from '../http/errors.js';
+import { normalizePhone } from '../phone.js';
 import { BCRYPT_MAX_BYTES } from './password.js';
 
 // Roles a person may give themselves. 'admin' is deliberately absent: a public
@@ -21,8 +22,11 @@ export const PASSWORD_MIN_LENGTH = 8;
 // Deliberately permissive. Strict email regexes reject valid addresses; the
 // real check is whether mail to it is ever delivered.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-// Digits, optionally a leading +, 7-15 digits. Fits users.phone VARCHAR(20).
-const PHONE_RE = /^\+?[0-9]{7,15}$/;
+
+// Phone numbers are not pattern-matched here. They go through normalizePhone,
+// which reduces every accepted way of writing a number to one canonical E.164
+// string — registration and login must apply exactly the same reduction, or
+// the two ends disagree about which account a number belongs to.
 
 function fieldErrors(checks) {
   return checks.filter((c) => c.when).map(({ field, message }) => ({ field, message }));
@@ -36,6 +40,10 @@ export function validateRegister(body = {}) {
   // neither is run through the format checks below.
   const hasEmail = typeof email === 'string' && email.trim() !== '';
 
+  // Reduced to E.164 before anything else looks at it, so the value that
+  // reaches the UNIQUE constraint is the same one a later login will produce.
+  const normalizedPhone = normalizePhone(phone);
+
   const errors = fieldErrors([
     { when: email !== undefined && email !== null && typeof email !== 'string',
       field: 'email', message: 'Email must be a string.' },
@@ -44,9 +52,7 @@ export function validateRegister(body = {}) {
     { when: hasEmail && email.trim().length > 255,
       field: 'email', message: 'Email must be 255 characters or fewer.' },
 
-    { when: !phone, field: 'phone', message: 'Phone is required.' },
-    { when: typeof phone === 'string' && !PHONE_RE.test(phone.trim()),
-      field: 'phone', message: 'Phone must be 7-15 digits, optionally starting with +.' },
+    { when: !normalizedPhone.ok, field: 'phone', message: normalizedPhone.reason },
 
     { when: !password, field: 'password', message: 'Password is required.' },
     { when: typeof password === 'string' && password.length < PASSWORD_MIN_LENGTH,
@@ -77,7 +83,7 @@ export function validateRegister(body = {}) {
     // NULL rather than '' when omitted: users.email is a nullable UNIQUE
     // column, and PostgreSQL allows many NULLs but only one empty string.
     email: hasEmail ? email.trim().toLowerCase() : null,
-    phone: phone.trim(),
+    phone: normalizedPhone.value,
     password,
     fullName: fullName.trim(),
     role,
@@ -96,10 +102,15 @@ export function validateLogin(body = {}) {
   const hasPhone = typeof phone === 'string' && phone.trim() !== '';
   const hasEmail = typeof email === 'string' && email.trim() !== '';
 
+  // The same reduction registration used. Applying it here is the whole point:
+  // the number is looked up in the form it was stored in, whatever the user
+  // typed this time.
+  const normalizedPhone = hasPhone ? normalizePhone(phone) : null;
+
   const errors = fieldErrors([
     { when: !hasPhone && !hasEmail, field: 'phone', message: 'Phone or email is required.' },
-    { when: hasPhone && !PHONE_RE.test(phone.trim()),
-      field: 'phone', message: 'Phone must be 7-15 digits, optionally starting with +.' },
+    { when: normalizedPhone !== null && !normalizedPhone.ok,
+      field: 'phone', message: normalizedPhone?.reason },
     { when: !password || typeof password !== 'string', field: 'password', message: 'Password is required.' },
   ]);
 
@@ -110,7 +121,7 @@ export function validateLogin(body = {}) {
   // Phone wins when both are sent, so the lookup is decided here rather than
   // leaving two possible users to whichever query ran first.
   return {
-    phone: hasPhone ? phone.trim() : null,
+    phone: hasPhone ? normalizedPhone.value : null,
     email: hasPhone || !hasEmail ? null : email.trim().toLowerCase(),
     password,
   };
