@@ -31,12 +31,17 @@ function fieldErrors(checks) {
 export function validateRegister(body = {}) {
   const { email, password, fullName, phone, role, preferredLanguage } = body;
 
+  // Phone is the account's identity; email is optional extra contact detail.
+  // An absent email and an empty-string email mean the same thing here, so
+  // neither is run through the format checks below.
+  const hasEmail = typeof email === 'string' && email.trim() !== '';
+
   const errors = fieldErrors([
-    { when: !email, field: 'email', message: 'Email is required.' },
-    { when: email && typeof email !== 'string', field: 'email', message: 'Email must be a string.' },
-    { when: typeof email === 'string' && !EMAIL_RE.test(email.trim()),
+    { when: email !== undefined && email !== null && typeof email !== 'string',
+      field: 'email', message: 'Email must be a string.' },
+    { when: hasEmail && !EMAIL_RE.test(email.trim()),
       field: 'email', message: 'Email is not a valid address.' },
-    { when: typeof email === 'string' && email.trim().length > 255,
+    { when: hasEmail && email.trim().length > 255,
       field: 'email', message: 'Email must be 255 characters or fewer.' },
 
     { when: !phone, field: 'phone', message: 'Phone is required.' },
@@ -69,7 +74,9 @@ export function validateRegister(body = {}) {
   }
 
   return {
-    email: email.trim().toLowerCase(),
+    // NULL rather than '' when omitted: users.email is a nullable UNIQUE
+    // column, and PostgreSQL allows many NULLs but only one empty string.
+    email: hasEmail ? email.trim().toLowerCase() : null,
     phone: phone.trim(),
     password,
     fullName: fullName.trim(),
@@ -78,11 +85,21 @@ export function validateRegister(body = {}) {
   };
 }
 
+/**
+ * Login accepts either identity. Phone is the primary one — many elderly users
+ * have no email address — but a family member who registered with both should
+ * not be made to remember which field the form wants, so email still works.
+ */
 export function validateLogin(body = {}) {
-  const { email, password } = body;
+  const { phone, email, password } = body;
+
+  const hasPhone = typeof phone === 'string' && phone.trim() !== '';
+  const hasEmail = typeof email === 'string' && email.trim() !== '';
 
   const errors = fieldErrors([
-    { when: !email || typeof email !== 'string', field: 'email', message: 'Email is required.' },
+    { when: !hasPhone && !hasEmail, field: 'phone', message: 'Phone or email is required.' },
+    { when: hasPhone && !PHONE_RE.test(phone.trim()),
+      field: 'phone', message: 'Phone must be 7-15 digits, optionally starting with +.' },
     { when: !password || typeof password !== 'string', field: 'password', message: 'Password is required.' },
   ]);
 
@@ -90,7 +107,13 @@ export function validateLogin(body = {}) {
     throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
   }
 
-  return { email: email.trim().toLowerCase(), password };
+  // Phone wins when both are sent, so the lookup is decided here rather than
+  // leaving two possible users to whichever query ran first.
+  return {
+    phone: hasPhone ? phone.trim() : null,
+    email: hasPhone || !hasEmail ? null : email.trim().toLowerCase(),
+    password,
+  };
 }
 
 export function validateRefreshTokenBody(body = {}) {

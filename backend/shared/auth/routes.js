@@ -76,13 +76,13 @@ authRouter.post('/register', async (req, res) => {
 // ---------------------------------------------------------------------------
 
 authRouter.post('/login', async (req, res) => {
-  const { email, password } = validateLogin(req.body);
+  const { phone, email, password } = validateLogin(req.body);
 
-  const user = await findUserForLogin(email);
+  const user = await findUserForLogin({ phone, email });
 
-  // One message for "no such email" and for "wrong password", so the endpoint
-  // cannot be used to discover which addresses have accounts.
-  const invalid = unauthorized('invalid_credentials', 'Email or password is incorrect.');
+  // One message for "no such account" and for "wrong password", so the endpoint
+  // cannot be used to discover which numbers or addresses are registered.
+  const invalid = unauthorized('invalid_credentials', 'Phone/email or password is incorrect.');
 
   if (!user) {
     // Hash anyway: returning instantly for unknown emails leaks their absence

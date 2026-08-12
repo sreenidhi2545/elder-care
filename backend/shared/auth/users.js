@@ -36,13 +36,18 @@ export async function findUserById(id) {
 }
 
 /**
- * Fetches a user for the login check. This is the one place password_hash is
- * read, and it must never reach a response body.
+ * Fetches a user for the login check, by phone or by email. This is the one
+ * place password_hash is read, and it must never reach a response body.
+ *
+ * Exactly one identity is used — validateLogin picks phone when both are sent —
+ * because an OR across two unique columns can match two different accounts.
  */
-export async function findUserForLogin(email) {
+export async function findUserForLogin({ phone, email }) {
+  const [column, value] = phone ? ['phone', phone] : ['email', email];
+
   const { rows } = await query(
-    `SELECT ${PUBLIC_COLUMNS}, password_hash FROM users WHERE email = $1`,
-    [email]
+    `SELECT ${PUBLIC_COLUMNS}, password_hash FROM users WHERE ${column} = $1`,
+    [value]
   );
   return rows[0] ?? null;
 }
