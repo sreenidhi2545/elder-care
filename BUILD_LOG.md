@@ -250,6 +250,65 @@ Not verified, because it needs the device: that the phone reaches the backend ov
 
 ---
 
+## 2026-08-12 — Downgraded to Expo SDK 54, and a configuration bug it exposed
+
+### Why
+
+Expo Go on the phone refused the project: it was built on SDK 57, and the Expo Go in the app stores does not support that.
+
+Expo's own changelog explains it. **Expo Go in both the App Store and Google Play is on SDK 54**, and SDK 56 and 57 are not available in either store with no timeline for when they will be — Apple has not approved the newer submissions for months. Newer SDKs can only be run through a development build, through `eas go` with an Apple Developer membership, or in a simulator.
+
+So the SDK the project targets is not really a choice: **anything above 54 cannot be opened in Expo Go on a real phone**, and running on a real phone through Expo Go is exactly what the setup checklist in `WORK_DIVISION.md` asks every team member to do.
+
+### The decision
+
+Target SDK 54. The alternatives were both worse for this team:
+
+- **A development build.** More capable — it is where the project has to go eventually, since Twilio and background location in later phases will need native modules Expo Go cannot provide. But it means every teammate installing Android Studio or holding an Apple Developer membership, and a build step before anyone can see a screen. Not the right cost at Phase 0, when the point is that three people can run the app today.
+- **`eas go` with TestFlight.** Needs a paid Apple Developer membership and puts the iOS build behind an invite. Same objection, plus money.
+
+SDK 54 is a year of tooling behind the newest, and nothing the project uses needs anything newer. When a development build becomes necessary for Phase 1's native modules, the SDK can move at the same time.
+
+### What changed
+
+`expo` pinned to `~54.0.0`, then `npx expo install --fix` realigned everything else to what that SDK expects:
+
+| Package | Was (SDK 57) | Now (SDK 54) |
+|---|---|---|
+| `expo` | 57.0.12 | 54.0.36 |
+| `react-native` | 0.86.2 | 0.81.5 |
+| `react` | 19.2.3 | 19.1.0 |
+| `expo-secure-store` | 57.0.1 | 15.0.8 |
+| `expo-constants` | 57.0.10 | 18.0.13 |
+| `expo-status-bar` | 57.0.1 | 3.0.9 |
+| `react-native-screens` | 4.26.2 | 4.16.0 |
+| `react-native-safe-area-context` | 5.7.0 | 5.6.2 |
+
+The React Navigation packages are not Expo-managed and did not move; version 7 supports React Native 0.81. No application code needed changing for the downgrade — every API the shell uses is present in both SDKs.
+
+`npx expo install --fix` also added `@expo/ngrok` as a dependency, which was removed again. It is a tool for `expo start --tunnel`, not something the app uses at runtime.
+
+### A real bug this uncovered
+
+Checking the resolved configuration afterwards showed `extra.apiUrl` coming out as `{}` — an empty object — where `app.json` said `null`.
+
+Expo normalises a `null` in `app.json` to `{}`, and `{}` is truthy in JavaScript. The check in `src/shared/config.js` was `if (configured)`, so it would have accepted that object and produced a base URL of the string `"[object Object]"`. **Every request from the app would have failed**, with a network error pointing at the Wi-Fi or the firewall rather than at a configuration value nobody would have thought to look at.
+
+Fixed at both ends, because either alone would leave the trap in place:
+
+- `app.json` no longer carries an `apiUrl` key at all. The comment beside it now says what to add when you want to override the address, and warns not to write `null` there.
+- `config.js` accepts the value only if it is a non-empty string, rather than merely truthy.
+
+It had not been caught earlier because the bundle check proves the code compiles, not that it computes the right address, and the app had never been run on a device.
+
+### Verified
+
+`npx expo config` reports `sdkVersion 54.0.0` and `extra.apiUrl` as `undefined`. `npx expo install --check` reports every dependency matching SDK 54. A Metro production bundle succeeds: 838 modules, Hermes bytecode generated, no errors or unresolved imports.
+
+Still not verified on a device — that is the next thing to do, and now it is possible.
+
+---
+
 ## Open issues
 
 Things known to be wrong or undecided. Each should be closed before the work that depends on it starts.
@@ -264,7 +323,8 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 - **No tests.** Every verification so far has been manual `curl` against a running server, plus a Metro bundle for the app. Nothing catches a regression automatically. `shared/phone.js` is the first piece of pure logic in the codebase with enough branches to be worth unit tests, and it is the natural place to start.
 - **The temporary sign-in panel** in `frontend/src/shared/screens/LoginScreen.js` must go when the real login screen lands. It is marked on screen and in the code, but nothing enforces its removal.
 - **The app shell is unverified on a real device.** It bundles and the backend calls are proven, but nothing has confirmed the phone reaches the backend over Wi-Fi, that SecureStore persists across a restart, or that each role visibly lands on its own screen.
-- **`npm audit` reports 18 vulnerabilities** (7 moderate, 11 high) in the frontend tree, effectively all in transitive build tooling rather than anything shipped to the phone. `npm audit fix` is deliberately not run — on an Expo project it breaks the SDK version alignment that `npx expo install` maintains.
+- **`npm audit` reports 19 vulnerabilities** (8 moderate, 11 high) in the frontend tree, effectively all in transitive build tooling rather than anything shipped to the phone. `npm audit fix` is deliberately not run — on an Expo project it breaks the SDK version alignment that `npx expo install` maintains.
+- **Expo Go caps the SDK at 54.** Phase 1 needs native modules Expo Go cannot provide — Twilio, background location, push notifications beyond the basics — so a development build is coming whether or not the SDK moves. Worth planning before Phase 1 rather than discovering it mid-phase.
 - **No mobile app.** Phase 0 steps 4 and 5 — the Expo shell and the login and registration screens — are the remaining work, and there is no frontend code at all yet.
 - **No admin account** in the development database, so the admin-only endpoint cannot be tested until one is promoted.
 - **`JWT_SECRET` length is only a warning, not a startup failure.** Acceptable in development; it must not reach a deployment that way.

@@ -40,7 +40,14 @@ function metroHost() {
 
 function resolveApiUrl() {
   const configured = Constants.expoConfig?.extra?.apiUrl;
-  if (configured) return String(configured).replace(/\/+$/, '');
+
+  // Checked for being a non-empty string, not merely truthy. Expo resolves a
+  // `null` in app.json to `{}`, which passes a truthy test and would make the
+  // base URL the string "[object Object]" — every request then fails with a
+  // network error that points nowhere near the actual mistake.
+  if (typeof configured === 'string' && configured.trim() !== '') {
+    return configured.trim().replace(/\/+$/, '');
+  }
 
   const host = metroHost();
   if (host) return `http://${host}:${BACKEND_PORT}`;
