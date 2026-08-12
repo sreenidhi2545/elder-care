@@ -384,6 +384,43 @@ The 50 most recently created users. Admin only.
 
 ---
 
+---
+
+## For the login and registration screens
+
+Phase 0 step 5, Teammate C. The app shell already handles tokens, refresh and role-based routing — the screens only have to collect credentials and hand the response over.
+
+**Where the code goes:** `frontend/src/shared/screens/LoginScreen.js`. The comment block at the top of that file repeats all of this next to the code, and the temporary sign-in panel in it is scaffolding to delete once the real screen works.
+
+**The whole handover is two lines:**
+
+```js
+import { login, register } from '../api/auth';
+import { useAuth } from '../auth/AuthContext';
+
+const { signIn } = useAuth();
+
+// logging in
+const response = await login({ phone, password });
+await signIn(response);
+
+// registering — the response carries tokens, so no second login call
+const response = await register({ phone, password, fullName, role });
+await signIn(response);
+```
+
+`signIn` stores both tokens in SecureStore and switches the navigator to the home screen for that user's role. **Do not navigate by hand and do not read the role yourself** — routing off `user.role` is already built in `src/shared/navigation/AppNavigator.js`.
+
+**Which endpoints to call:** `POST /auth/login` and `POST /auth/register`, both documented above. Nothing else. `/auth/refresh` is handled inside the API client; a screen never calls it.
+
+**Do not reformat the phone number.** Send the field exactly as typed — the backend normalises to E.164 and is the only place that does. Show `+91` as a fixed prefix beside a 10-digit input so most people type ten plain digits, but do not strip, pad or rewrite what they enter.
+
+**Errors** come back as `ApiError` with `.status`, `.code` and `.details`, or `NetworkError` when the request never arrived. Branch on `.code`: `invalid_credentials`, `account_exists`, `account_disabled`, `role_not_self_assignable`, `validation_failed`. On `validation_failed`, `.details` lists every bad field at once — show each message against its own input.
+
+**Roles the form may offer:** `elderly`, `family`, `caregiver`. Not `admin` — the server rejects it with `403 role_not_self_assignable`.
+
+---
+
 ## Not yet built
 
 Everything below is planned but does not exist. Do not code against it — it will be specified here first.

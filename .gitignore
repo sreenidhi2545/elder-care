@@ -12,6 +12,20 @@ node_modules/
 dist/
 build/
 
+# Expo
+.expo/
+web-build/
+expo-env.d.ts
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+.metro-health-check*
+
+# Generated native folders — the app is managed by Expo, these are rebuilt
+frontend/ios/
+frontend/android/
+
 # Logs
 *.log
 npm-debug.log*

@@ -172,6 +172,84 @@ Run against the development database, it reported **3 rows examined, 3 already c
 
 ---
 
+## 2026-08-12 — Expo app shell (Phase 0, step 4)
+
+The mobile app, shell only: it runs, it knows who is signed in, it talks to the backend, and it sends each role to a different home screen. No features — those are Phases 1, 2 and 5.
+
+### The project
+
+Expo SDK 57 (React Native 0.86, React 19.2) created with the blank template. It was scaffolded into a temporary folder and merged into `frontend/` rather than generated in place, because `create-expo-app` refuses a non-empty directory and `frontend/src/` already held the module folders.
+
+`index.js` at the root hands `src/App.js` to Expo, so all application code stays under `src/` in the layout `PROJECT_REPORT.md` section 5 documents.
+
+Dependencies, all pinned by `npx expo install` so they match the SDK: `@react-navigation/native`, `@react-navigation/native-stack`, `react-native-screens`, `react-native-safe-area-context`, `expo-secure-store`, `expo-constants`. No HTTP client library — the built-in `fetch` is enough, and an extra dependency here would only wrap it.
+
+### React Navigation rather than Expo Router
+
+Expo Router is the current Expo default and is file-based: routes are files under an `app/` directory, and role routing is done with route groups and redirects.
+
+React Navigation was chosen because role routing becomes an ordinary `switch` on `user.role` in one readable file, and because everything stays inside `src/{emergency,caregiver,shared}` — the structure both project documents already describe. Expo Router would have pulled the screens out into a parallel `app/` tree and split the layout across two conventions. The cost is writing navigators by hand instead of getting them from the filesystem, which for a shell this size is a few dozen lines.
+
+### How the backend address is found
+
+A phone is not the computer, so `http://localhost:5000` on a handset means the handset and every request fails with an unexplained network error. `src/shared/config.js` resolves the address in three steps: `expo.extra.apiUrl` from `app.json` if set, otherwise the IP of the computer running Metro — which Expo already tells the app so it can fetch the JavaScript bundle, and which is the same machine running the backend in development — and finally `localhost`.
+
+The alternative was making every developer look up their own IP and edit a file before anything worked. Reusing the address Expo already provides means the app finds the backend with no configuration at all.
+
+### Tokens
+
+`expo-secure-store`, not `AsyncStorage`. AsyncStorage is an unencrypted file in the app sandbox; SecureStore uses the iOS Keychain and Android EncryptedSharedPreferences. The refresh token is a 30-day credential for someone's emergency account and belongs behind the same door as a password. Storing it is also what keeps a user signed in across restarts.
+
+SecureStore has no web implementation, so the browser falls back to an in-memory map — tokens do not survive a page reload there. Accepted: the web target is only for a quick look at a screen, and the product ships to phones.
+
+### The API client
+
+`src/shared/api/client.js` is the only file that knows how to reach the backend. For an authenticated request it attaches the Bearer token; on `401 token_expired` it calls `/auth/refresh`, stores the new pair and retries the original request exactly once; if the refresh itself fails it clears the tokens and drops the app to the login screen. A screen therefore never sees a token and never handles an expiry.
+
+**Concurrent refreshes share one promise.** Several screens can be loading at once, and if the access token has just expired they all get a 401 together. Without the shared promise each would start its own refresh, the first would rotate the token, and the rest would present one that had already been exchanged — which the backend correctly reads as theft and answers by ending every session for the account. The bug would have looked like random logouts under load.
+
+Requests carry a 15-second timeout via `AbortController`. Without one, a request to an unreachable backend hangs until the platform gives up, which on a phone is a minute of spinner and no explanation.
+
+The client holds no React state; `AuthContext` injects what it needs through `configureApiClient`, which keeps it importable from anywhere without a circular dependency back into the component tree.
+
+### Auth state and routing
+
+`AuthContext` has three states: `restoring`, `signedOut`, `signedIn`. `restoring` exists as its own state so a returning user does not see the login screen flash before their home screen replaces it — reading SecureStore and confirming the token with `/auth/me` takes a moment.
+
+Tokens live in a ref rather than in state, because the client reads them from callbacks that can run mid-request and a value captured in a closure can be one render stale — here that would mean sending a token that had just been rotated away.
+
+`RootNavigator` swaps the whole tree on that state rather than navigating between an auth stack and an app stack, so signing out cannot leave a screen behind for someone to swipe back into. `AppNavigator` then gives each role its own navigator, so Phase 1 can add emergency routes to the elderly and family stacks without those routes existing for a caregiver at all — a screen a role should not reach is better absent than merely unlinked.
+
+**This is navigation, not security.** An elderly user cannot reach the admin screen, but the reason they cannot read admin data is that the server checks the role on every request.
+
+### Screens
+
+Four placeholders, one per role, each in its owning module's folder: elderly and family under `emergency/`, caregiver under `caregiver/`, admin under `shared/` since it belongs to no module. Each shows the signed-in user, the backend address and its health, and what arrives in later phases — between them enough to prove storage, token, request and routing all work. All four are replaced in Phases 1, 2 and 5.
+
+### The login screen is left for Teammate C
+
+`src/shared/screens/LoginScreen.js` is a placeholder carrying the instructions: what to build, which endpoints to call, the two-line handover to `signIn()`, the error codes to branch on, and the rule not to reformat phone numbers. The same instructions are in `API.md` under "For the login and registration screens".
+
+It also carries a temporary sign-in panel — two inputs and a button, marked on screen and in the code as Teammate C's to delete. Without it there is no way to reach any home screen, so the routing built in this step could not be tested at all. It calls the same `login()` and `signIn()` the real screen will, so it exercises that path too. It has no validation, no registration and no accessibility work, all of which are the real screen's job.
+
+### Test accounts
+
+`backend/scripts/seed-test-users.js` creates one account per role, all sharing a password passed on the command line so no working credential is committed. Re-running with a different password updates the accounts instead of colliding.
+
+It writes to the database directly rather than calling the API, because `admin` cannot be self-assigned through `/auth/register` — seeding through the API would mean three accounts and then a manual SQL step for the fourth. It uses the same `hashPassword` and `normalizePhone` the API uses, so the rows are identical to registered ones, and it refuses to run with `NODE_ENV=production`.
+
+The accounts carry no email address, which exercises the phone-only path.
+
+### Verified
+
+A real Metro production bundle of the current tree: `Android Bundled 839 modules`, no errors or unresolved imports — that exercises the entire import graph from the entry point through to SecureStore. `npx expo install --check` reports every dependency matching SDK 57.
+
+Against the running backend, all four seeded accounts log in and return the right role, each typed in a different phone format (`9000000001`, `+919000000002`, `919000000003`, `09000000004`), and the admin account reaches `/auth/admin/users` with a 200.
+
+Not verified, because it needs the device: that the phone reaches the backend over Wi-Fi, that SecureStore survives a restart, and that each role visibly lands on its own screen.
+
+---
+
 ## Open issues
 
 Things known to be wrong or undecided. Each should be closed before the work that depends on it starts.
@@ -183,7 +261,10 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 ### Open
 
 - **`emergency_contacts.phone` is not normalised yet.** The table is empty, so there is nothing to migrate, but Phase 1 must run contact numbers through `normalizePhone` when it starts writing them — otherwise the same duplicate problem reappears on a table where a duplicate means someone gets called twice and someone else not at all.
-- **No tests.** Every verification so far has been manual `curl` against a running server. Nothing catches a regression automatically. `shared/phone.js` is the first piece of pure logic in the codebase with enough branches to be worth unit tests, and it is the natural place to start.
+- **No tests.** Every verification so far has been manual `curl` against a running server, plus a Metro bundle for the app. Nothing catches a regression automatically. `shared/phone.js` is the first piece of pure logic in the codebase with enough branches to be worth unit tests, and it is the natural place to start.
+- **The temporary sign-in panel** in `frontend/src/shared/screens/LoginScreen.js` must go when the real login screen lands. It is marked on screen and in the code, but nothing enforces its removal.
+- **The app shell is unverified on a real device.** It bundles and the backend calls are proven, but nothing has confirmed the phone reaches the backend over Wi-Fi, that SecureStore persists across a restart, or that each role visibly lands on its own screen.
+- **`npm audit` reports 18 vulnerabilities** (7 moderate, 11 high) in the frontend tree, effectively all in transitive build tooling rather than anything shipped to the phone. `npm audit fix` is deliberately not run — on an Expo project it breaks the SDK version alignment that `npx expo install` maintains.
 - **No mobile app.** Phase 0 steps 4 and 5 — the Expo shell and the login and registration screens — are the remaining work, and there is no frontend code at all yet.
 - **No admin account** in the development database, so the admin-only endpoint cannot be tested until one is promoted.
 - **`JWT_SECRET` length is only a warning, not a startup failure.** Acceptable in development; it must not reach a deployment that way.
