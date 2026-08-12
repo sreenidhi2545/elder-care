@@ -1,6 +1,6 @@
 # ElderCare — Database Schema Design
 
-**Status:** Revision 2 — incorporates your decisions of this round. Awaiting approval. No code has been written and nothing has been run against a database.
+**Status:** Revision 2 — approved and applied. The SQL in section 6 lives at `backend/shared/db/schema.sql` and has been run against the local `eldercare` database: all 19 tables, 17 enum types and 17 `updated_at` triggers are present and verified.
 **Scope:** Phase 0 (Foundation) — this document defines the database for the *entire* project, both modules, as required by Phase 0. Later-phase features are not built here; their tables are defined now so that nobody has to change the schema mid-project.
 **Database:** PostgreSQL 14 or newer. No PostGIS.
 
