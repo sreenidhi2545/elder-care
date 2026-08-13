@@ -1,5 +1,5 @@
 ﻿-- ============================================================================
--- ElderCare â€” Database Schema
+-- ElderCare - Database Schema
 -- PostgreSQL 14+   (no PostGIS)
 --
 -- Revision 2. 19 tables: 4 shared, 7 emergency, 8 caregiver.
