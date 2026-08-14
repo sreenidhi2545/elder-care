@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "ElderCare",
+    "slug": "eldercare",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "//": "Add \"apiUrl\": \"http://host:5000\" here to point the app at a specific backend.",
+      "//2": "With no apiUrl key, the app uses the computer running Metro — see src/shared/config.js.",
+      "//3": "Do not set it to null: Expo resolves a null here to {}, which is truthy."
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}

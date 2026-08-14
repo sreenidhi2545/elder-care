@@ -172,6 +172,143 @@ Run against the development database, it reported **3 rows examined, 3 already c
 
 ---
 
+## 2026-08-12 — Expo app shell (Phase 0, step 4)
+
+The mobile app, shell only: it runs, it knows who is signed in, it talks to the backend, and it sends each role to a different home screen. No features — those are Phases 1, 2 and 5.
+
+### The project
+
+Expo SDK 57 (React Native 0.86, React 19.2) created with the blank template. It was scaffolded into a temporary folder and merged into `frontend/` rather than generated in place, because `create-expo-app` refuses a non-empty directory and `frontend/src/` already held the module folders.
+
+`index.js` at the root hands `src/App.js` to Expo, so all application code stays under `src/` in the layout `PROJECT_REPORT.md` section 5 documents.
+
+Dependencies, all pinned by `npx expo install` so they match the SDK: `@react-navigation/native`, `@react-navigation/native-stack`, `react-native-screens`, `react-native-safe-area-context`, `expo-secure-store`, `expo-constants`. No HTTP client library — the built-in `fetch` is enough, and an extra dependency here would only wrap it.
+
+### React Navigation rather than Expo Router
+
+Expo Router is the current Expo default and is file-based: routes are files under an `app/` directory, and role routing is done with route groups and redirects.
+
+React Navigation was chosen because role routing becomes an ordinary `switch` on `user.role` in one readable file, and because everything stays inside `src/{emergency,caregiver,shared}` — the structure both project documents already describe. Expo Router would have pulled the screens out into a parallel `app/` tree and split the layout across two conventions. The cost is writing navigators by hand instead of getting them from the filesystem, which for a shell this size is a few dozen lines.
+
+### How the backend address is found
+
+A phone is not the computer, so `http://localhost:5000` on a handset means the handset and every request fails with an unexplained network error. `src/shared/config.js` resolves the address in three steps: `expo.extra.apiUrl` from `app.json` if set, otherwise the IP of the computer running Metro — which Expo already tells the app so it can fetch the JavaScript bundle, and which is the same machine running the backend in development — and finally `localhost`.
+
+The alternative was making every developer look up their own IP and edit a file before anything worked. Reusing the address Expo already provides means the app finds the backend with no configuration at all.
+
+### Tokens
+
+`expo-secure-store`, not `AsyncStorage`. AsyncStorage is an unencrypted file in the app sandbox; SecureStore uses the iOS Keychain and Android EncryptedSharedPreferences. The refresh token is a 30-day credential for someone's emergency account and belongs behind the same door as a password. Storing it is also what keeps a user signed in across restarts.
+
+SecureStore has no web implementation, so the browser falls back to an in-memory map — tokens do not survive a page reload there. Accepted: the web target is only for a quick look at a screen, and the product ships to phones.
+
+### The API client
+
+`src/shared/api/client.js` is the only file that knows how to reach the backend. For an authenticated request it attaches the Bearer token; on `401 token_expired` it calls `/auth/refresh`, stores the new pair and retries the original request exactly once; if the refresh itself fails it clears the tokens and drops the app to the login screen. A screen therefore never sees a token and never handles an expiry.
+
+**Concurrent refreshes share one promise.** Several screens can be loading at once, and if the access token has just expired they all get a 401 together. Without the shared promise each would start its own refresh, the first would rotate the token, and the rest would present one that had already been exchanged — which the backend correctly reads as theft and answers by ending every session for the account. The bug would have looked like random logouts under load.
+
+Requests carry a 15-second timeout via `AbortController`. Without one, a request to an unreachable backend hangs until the platform gives up, which on a phone is a minute of spinner and no explanation.
+
+The client holds no React state; `AuthContext` injects what it needs through `configureApiClient`, which keeps it importable from anywhere without a circular dependency back into the component tree.
+
+### Auth state and routing
+
+`AuthContext` has three states: `restoring`, `signedOut`, `signedIn`. `restoring` exists as its own state so a returning user does not see the login screen flash before their home screen replaces it — reading SecureStore and confirming the token with `/auth/me` takes a moment.
+
+Tokens live in a ref rather than in state, because the client reads them from callbacks that can run mid-request and a value captured in a closure can be one render stale — here that would mean sending a token that had just been rotated away.
+
+`RootNavigator` swaps the whole tree on that state rather than navigating between an auth stack and an app stack, so signing out cannot leave a screen behind for someone to swipe back into. `AppNavigator` then gives each role its own navigator, so Phase 1 can add emergency routes to the elderly and family stacks without those routes existing for a caregiver at all — a screen a role should not reach is better absent than merely unlinked.
+
+**This is navigation, not security.** An elderly user cannot reach the admin screen, but the reason they cannot read admin data is that the server checks the role on every request.
+
+### Screens
+
+Four placeholders, one per role, each in its owning module's folder: elderly and family under `emergency/`, caregiver under `caregiver/`, admin under `shared/` since it belongs to no module. Each shows the signed-in user, the backend address and its health, and what arrives in later phases — between them enough to prove storage, token, request and routing all work. All four are replaced in Phases 1, 2 and 5.
+
+### The login screen is left for Teammate C
+
+`src/shared/screens/LoginScreen.js` is a placeholder carrying the instructions: what to build, which endpoints to call, the two-line handover to `signIn()`, the error codes to branch on, and the rule not to reformat phone numbers. The same instructions are in `API.md` under "For the login and registration screens".
+
+It also carries a temporary sign-in panel — two inputs and a button, marked on screen and in the code as Teammate C's to delete. Without it there is no way to reach any home screen, so the routing built in this step could not be tested at all. It calls the same `login()` and `signIn()` the real screen will, so it exercises that path too. It has no validation, no registration and no accessibility work, all of which are the real screen's job.
+
+### Test accounts
+
+`backend/scripts/seed-test-users.js` creates one account per role, all sharing a password passed on the command line so no working credential is committed. Re-running with a different password updates the accounts instead of colliding.
+
+It writes to the database directly rather than calling the API, because `admin` cannot be self-assigned through `/auth/register` — seeding through the API would mean three accounts and then a manual SQL step for the fourth. It uses the same `hashPassword` and `normalizePhone` the API uses, so the rows are identical to registered ones, and it refuses to run with `NODE_ENV=production`.
+
+The accounts carry no email address, which exercises the phone-only path.
+
+### Verified
+
+A real Metro production bundle of the current tree: `Android Bundled 839 modules`, no errors or unresolved imports — that exercises the entire import graph from the entry point through to SecureStore. `npx expo install --check` reports every dependency matching SDK 57.
+
+Against the running backend, all four seeded accounts log in and return the right role, each typed in a different phone format (`9000000001`, `+919000000002`, `919000000003`, `09000000004`), and the admin account reaches `/auth/admin/users` with a 200.
+
+Not verified, because it needs the device: that the phone reaches the backend over Wi-Fi, that SecureStore survives a restart, and that each role visibly lands on its own screen.
+
+---
+
+## 2026-08-12 — Downgraded to Expo SDK 54, and a configuration bug it exposed
+
+### Why
+
+Expo Go on the phone refused the project: it was built on SDK 57, and the Expo Go in the app stores does not support that.
+
+Expo's own changelog explains it. **Expo Go in both the App Store and Google Play is on SDK 54**, and SDK 56 and 57 are not available in either store with no timeline for when they will be — Apple has not approved the newer submissions for months. Newer SDKs can only be run through a development build, through `eas go` with an Apple Developer membership, or in a simulator.
+
+So the SDK the project targets is not really a choice: **anything above 54 cannot be opened in Expo Go on a real phone**, and running on a real phone through Expo Go is exactly what the setup checklist in `WORK_DIVISION.md` asks every team member to do.
+
+### The decision
+
+Target SDK 54. The alternatives were both worse for this team:
+
+- **A development build.** More capable — it is where the project has to go eventually, since Twilio and background location in later phases will need native modules Expo Go cannot provide. But it means every teammate installing Android Studio or holding an Apple Developer membership, and a build step before anyone can see a screen. Not the right cost at Phase 0, when the point is that three people can run the app today.
+- **`eas go` with TestFlight.** Needs a paid Apple Developer membership and puts the iOS build behind an invite. Same objection, plus money.
+
+SDK 54 is a year of tooling behind the newest, and nothing the project uses needs anything newer. When a development build becomes necessary for Phase 1's native modules, the SDK can move at the same time.
+
+### What changed
+
+`expo` pinned to `~54.0.0`, then `npx expo install --fix` realigned everything else to what that SDK expects:
+
+| Package | Was (SDK 57) | Now (SDK 54) |
+|---|---|---|
+| `expo` | 57.0.12 | 54.0.36 |
+| `react-native` | 0.86.2 | 0.81.5 |
+| `react` | 19.2.3 | 19.1.0 |
+| `expo-secure-store` | 57.0.1 | 15.0.8 |
+| `expo-constants` | 57.0.10 | 18.0.13 |
+| `expo-status-bar` | 57.0.1 | 3.0.9 |
+| `react-native-screens` | 4.26.2 | 4.16.0 |
+| `react-native-safe-area-context` | 5.7.0 | 5.6.2 |
+
+The React Navigation packages are not Expo-managed and did not move; version 7 supports React Native 0.81. No application code needed changing for the downgrade — every API the shell uses is present in both SDKs.
+
+`npx expo install --fix` also added `@expo/ngrok` as a dependency, which was removed again. It is a tool for `expo start --tunnel`, not something the app uses at runtime.
+
+### A real bug this uncovered
+
+Checking the resolved configuration afterwards showed `extra.apiUrl` coming out as `{}` — an empty object — where `app.json` said `null`.
+
+Expo normalises a `null` in `app.json` to `{}`, and `{}` is truthy in JavaScript. The check in `src/shared/config.js` was `if (configured)`, so it would have accepted that object and produced a base URL of the string `"[object Object]"`. **Every request from the app would have failed**, with a network error pointing at the Wi-Fi or the firewall rather than at a configuration value nobody would have thought to look at.
+
+Fixed at both ends, because either alone would leave the trap in place:
+
+- `app.json` no longer carries an `apiUrl` key at all. The comment beside it now says what to add when you want to override the address, and warns not to write `null` there.
+- `config.js` accepts the value only if it is a non-empty string, rather than merely truthy.
+
+It had not been caught earlier because the bundle check proves the code compiles, not that it computes the right address, and the app had never been run on a device.
+
+### Verified
+
+`npx expo config` reports `sdkVersion 54.0.0` and `extra.apiUrl` as `undefined`. `npx expo install --check` reports every dependency matching SDK 54. A Metro production bundle succeeds: 838 modules, Hermes bytecode generated, no errors or unresolved imports.
+
+Still not verified on a device — that is the next thing to do, and now it is possible.
+
+---
+
 ## Open issues
 
 Things known to be wrong or undecided. Each should be closed before the work that depends on it starts.
@@ -183,7 +320,11 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 ### Open
 
 - **`emergency_contacts.phone` is not normalised yet.** The table is empty, so there is nothing to migrate, but Phase 1 must run contact numbers through `normalizePhone` when it starts writing them — otherwise the same duplicate problem reappears on a table where a duplicate means someone gets called twice and someone else not at all.
-- **No tests.** Every verification so far has been manual `curl` against a running server. Nothing catches a regression automatically. `shared/phone.js` is the first piece of pure logic in the codebase with enough branches to be worth unit tests, and it is the natural place to start.
+- **No tests.** Every verification so far has been manual `curl` against a running server, plus a Metro bundle for the app. Nothing catches a regression automatically. `shared/phone.js` is the first piece of pure logic in the codebase with enough branches to be worth unit tests, and it is the natural place to start.
+- **The temporary sign-in panel** in `frontend/src/shared/screens/LoginScreen.js` must go when the real login screen lands. It is marked on screen and in the code, but nothing enforces its removal.
+- **The app shell is unverified on a real device.** It bundles and the backend calls are proven, but nothing has confirmed the phone reaches the backend over Wi-Fi, that SecureStore persists across a restart, or that each role visibly lands on its own screen.
+- **`npm audit` reports 19 vulnerabilities** (8 moderate, 11 high) in the frontend tree, effectively all in transitive build tooling rather than anything shipped to the phone. `npm audit fix` is deliberately not run — on an Expo project it breaks the SDK version alignment that `npx expo install` maintains.
+- **Expo Go caps the SDK at 54.** Phase 1 needs native modules Expo Go cannot provide — Twilio, background location, push notifications beyond the basics — so a development build is coming whether or not the SDK moves. Worth planning before Phase 1 rather than discovering it mid-phase.
 - **No mobile app.** Phase 0 steps 4 and 5 — the Expo shell and the login and registration screens — are the remaining work, and there is no frontend code at all yet.
 - **No admin account** in the development database, so the admin-only endpoint cannot be tested until one is promoted.
 - **`JWT_SECRET` length is only a warning, not a startup failure.** Acceptable in development; it must not reach a deployment that way.
@@ -191,3 +332,29 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 - **`caregivers.average_rating` and `total_reviews`** are not maintained by the database. Whoever builds reviews in Phase 4 must recalculate them in the same transaction that writes the review.
 - **Overlapping caregiver visits** are not prevented by the database, only identical start times. The application has to check.
 - **Identity document numbers** are deliberately not stored. If the client requires them, the answer is a hash plus the document in a separate access-controlled store — not a plain column.
+
+---
+
+## 2026-08-14 — `SETUP.md`
+
+**Why now:** every setup step so far has been reconstructed from git history and from whoever did it originally. A new teammate cloning the repo on a fresh Windows machine had nothing that walked them through it end to end, and the project documents that do exist (`API.md`, `SCHEMA_DESIGN.md`, `WORK_DIVISION.md`) assume the reader already has the environment running.
+
+`SETUP.md` was written for someone who has never set up a development environment before: every command spelled out, no assumed knowledge. It covers, in order: installing Git, Node.js, VS Code, PostgreSQL 18 and Expo Go; cloning the repo and creating a feature branch; adding `psql` to PATH and why a new terminal is required afterwards; creating the `eldercare` database, running `backend/shared/db/schema.sql`, and confirming all 19 tables exist with `\dt`; creating `.env` from `.env.example` with a table explaining what each value means and a warning that the file is gitignored and must never be committed; `npm install` in both `backend/` and `frontend/`; seeding the four test accounts with `backend/scripts/seed-test-users.js` and what each is for; running the backend and Expo and scanning the QR code from Expo Go; and verifying the result with the `/health` endpoint, a login, and confirming the right role screen loads.
+
+It states plainly near the top that this is an Expo/React Native mobile app, not a website — no `index.html`, no Vite, the UI runs on a phone through Expo Go, not in a browser. This was worth saying explicitly because nothing else in the repository says it, and someone's first instinct on seeing a `frontend/` folder is reasonably to look for a page to open.
+
+**Troubleshooting section:** written from the problems the team actually hit, all traceable to entries already in this log — `psql` not recognised until PATH is edited and a new terminal opened (section 3 above), a forgotten `postgres` password with no real recovery short of reinstalling on a machine with nothing at stake yet, Expo Go capping the SDK at 54 (the 2026-08-12 SDK downgrade entry above), the phone unable to reach the laptop over Wi-Fi (network isolation, Windows Firewall's first-run prompt, or the `apiUrl`/`null`/`{}` trap from the same entry), and the wrong-folder confusion between the repo root and `backend/`/`frontend/`, which have their own separate `package.json` files.
+
+---
+
+## 2026-08-14 — Merge conflict: a Vite scaffold under `frontend/`
+
+**What happened.** Before the Expo shell (2026-08-12, above) was merged, a teammate had separately scaffolded a Vite web app directly into `frontend/` on `main` — `frontend/index.html`, `frontend/src/main.jsx` (a plain `react-dom` app), and a stray root-level `package-lock.json` with no matching root `package.json`, evidently left over from running `npm install` at the repository root by mistake. Landing that on `main` before the Expo work merged meant the pull request from `feature/emergency` into `main` conflicted on `frontend/package.json` and `frontend/package-lock.json` — one side had Expo and React Native, the other had Vite and `react-dom` for the same file.
+
+**Why Expo won outright, not a merge of both.** This project is a mobile app that runs on a phone through Expo Go — see `SETUP.md`'s opening section. A web frontend under the same folder is not a second flavour of the same app; Expo and Vite cannot coexist in one `package.json`, and nothing in any project document describes a web client. The Vite scaffold was scope creep from before the module folders existed, not a parallel feature.
+
+**How it was actually resolved.** By the time this was picked up, GitHub's Copilot coding agent had already been run against the open pull request and had pushed its own merge commit (`85fe877`, authored `copilot-swe-agent[bot]`) straight to `origin/feature/emergency`. It got the real conflict right — `frontend/package.json` and `frontend/package-lock.json` came out matching the Expo side exactly, no `vite` or `react-dom` anywhere — but it did not clean up: because `frontend/index.html`, `frontend/src/main.jsx` and the root `package-lock.json` were *new* files on the `main` side rather than edits to a file both branches touched, they merged in without triggering a conflict at all, and the bot had no reason to look at them.
+
+Rather than discard an already-pushed merge commit and force-push a from-scratch redo, the fix was applied on top of it: pull the existing merge, delete the three leftover files, and push normally as a fast-forward. Confirmed afterwards — `git grep` for `vite` and `react-dom` across the tracked tree turns up nothing but coincidental substring matches (`invited_by`, a base64 hash), `frontend/package.json` lists only `expo` and `react-native`, and `npx expo config` still resolves `sdkVersion: '54.0.0'`. `backend/shared/db/schema.sql` was left untouched — the teammate's encoding fix for the mangled em dash (`9d169cd`, already covered by 2026-08-08 above) came through the merge cleanly and stays.
+
+**Worth knowing for next time, with three people on one repository:** an automated conflict-resolution pass (Copilot's or otherwise) can fix the conflict markers correctly and still leave scope creep behind, because non-conflicting new files never get its attention. Reviewing "does this pull request still contain files it shouldn't" is a separate question from "does this pull request have conflicts," and answering the first one is still a human's job even after the second is automated away.
