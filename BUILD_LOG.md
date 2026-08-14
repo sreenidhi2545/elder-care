@@ -332,3 +332,15 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 - **`caregivers.average_rating` and `total_reviews`** are not maintained by the database. Whoever builds reviews in Phase 4 must recalculate them in the same transaction that writes the review.
 - **Overlapping caregiver visits** are not prevented by the database, only identical start times. The application has to check.
 - **Identity document numbers** are deliberately not stored. If the client requires them, the answer is a hash plus the document in a separate access-controlled store — not a plain column.
+
+---
+
+## 2026-08-14 — `SETUP.md`
+
+**Why now:** every setup step so far has been reconstructed from git history and from whoever did it originally. A new teammate cloning the repo on a fresh Windows machine had nothing that walked them through it end to end, and the project documents that do exist (`API.md`, `SCHEMA_DESIGN.md`, `WORK_DIVISION.md`) assume the reader already has the environment running.
+
+`SETUP.md` was written for someone who has never set up a development environment before: every command spelled out, no assumed knowledge. It covers, in order: installing Git, Node.js, VS Code, PostgreSQL 18 and Expo Go; cloning the repo and creating a feature branch; adding `psql` to PATH and why a new terminal is required afterwards; creating the `eldercare` database, running `backend/shared/db/schema.sql`, and confirming all 19 tables exist with `\dt`; creating `.env` from `.env.example` with a table explaining what each value means and a warning that the file is gitignored and must never be committed; `npm install` in both `backend/` and `frontend/`; seeding the four test accounts with `backend/scripts/seed-test-users.js` and what each is for; running the backend and Expo and scanning the QR code from Expo Go; and verifying the result with the `/health` endpoint, a login, and confirming the right role screen loads.
+
+It states plainly near the top that this is an Expo/React Native mobile app, not a website — no `index.html`, no Vite, the UI runs on a phone through Expo Go, not in a browser. This was worth saying explicitly because nothing else in the repository says it, and someone's first instinct on seeing a `frontend/` folder is reasonably to look for a page to open.
+
+**Troubleshooting section:** written from the problems the team actually hit, all traceable to entries already in this log — `psql` not recognised until PATH is edited and a new terminal opened (section 3 above), a forgotten `postgres` password with no real recovery short of reinstalling on a machine with nothing at stake yet, Expo Go capping the SDK at 54 (the 2026-08-12 SDK downgrade entry above), the phone unable to reach the laptop over Wi-Fi (network isolation, Windows Firewall's first-run prompt, or the `apiUrl`/`null`/`{}` trap from the same entry), and the wrong-folder confusion between the repo root and `backend/`/`frontend/`, which have their own separate `package.json` files.
