@@ -7,9 +7,10 @@
 //   POST /emergency/alerts/:id/resolve   "this is handled" — owner or family
 //   GET  /emergency/family/alerts        active alerts for linked elderly users
 //   GET  /emergency/family/alerts/history recent resolved/cancelled alerts, last 7 days
+//   POST /emergency/locations            record one GPS reading
 //
-// Phase 1, step 1 only: the SOS button and the alert record. No GPS capture,
-// no notification fanout — those are separate steps. See BUILD_LOG.md.
+// Phase 1, step 2: GPS location capture and storage. Still no geofencing
+// (Phase 3), no map UI, no notification fanout (step 3). See BUILD_LOG.md.
 // ============================================================================
 
 import { Router } from 'express';
@@ -27,7 +28,14 @@ import {
   listActiveFamilyAlerts,
   listFamilyAlertHistory,
 } from './alerts.js';
-import { validateListQuery, validateCloseAlertBody, validateHistoryQuery } from './validate.js';
+import { createLocation, toPublicLocation } from './locations.js';
+import {
+  validateListQuery,
+  validateCloseAlertBody,
+  validateHistoryQuery,
+  validateSosAlertBody,
+  validateCreateLocationBody,
+} from './validate.js';
 
 export const emergencyRouter = Router();
 
@@ -48,6 +56,8 @@ function requireAlertId(req) {
 // ---------------------------------------------------------------------------
 
 emergencyRouter.post('/alerts', requireAuth, async (req, res) => {
+  const location = validateSosAlertBody(req.body);
+
   // One active SOS per person at a time. A second press while one is already
   // open is not a second emergency — it is almost always the same emergency
   // pressed twice, or a retry after a slow response. Returning the existing
@@ -60,7 +70,7 @@ emergencyRouter.post('/alerts', requireAuth, async (req, res) => {
     });
   }
 
-  const alert = await createSosAlert(req.user.id);
+  const alert = await createSosAlert(req.user.id, location);
   res.status(201).json({ status: 'ok', alert: toPublicAlert(alert) });
 });
 
@@ -155,3 +165,14 @@ emergencyRouter.get(
     res.json({ status: 'ok', count: alerts.length, alerts });
   }
 );
+
+// ---------------------------------------------------------------------------
+// POST /emergency/locations — no role check, same reasoning as POST /alerts:
+// scoped to the caller's own user_id, restricted by UI, not by role here.
+// ---------------------------------------------------------------------------
+
+emergencyRouter.post('/locations', requireAuth, async (req, res) => {
+  const location = validateCreateLocationBody(req.body);
+  const row = await createLocation(req.user.id, location);
+  res.status(201).json({ status: 'ok', location: toPublicLocation(row) });
+});

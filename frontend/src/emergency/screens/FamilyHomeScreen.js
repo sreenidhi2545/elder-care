@@ -1,7 +1,7 @@
 // ============================================================================
 // Family home screen — active alerts
 //
-// Phase 1, step 1. Shows active alerts for elderly users this family member
+// Phase 1, steps 1-2. Shows active alerts for elderly users this family member
 // is linked to. Every linked (status='active') elderly user's alerts are
 // shown — a view-only family member still needs to know an emergency is
 // happening. Only alerts where the link's can_acknowledge_alerts is true get
@@ -16,12 +16,17 @@
 // interval; see BUILD_LOG.md for why that's an acceptable trade at this
 // scale.
 //
-// No live location, no map — those are Phase 3. No caregiver or care-plan
-// sections — those are Phase 2/4, owned by the caregiver module.
+// Active alert cards show coordinates (plain text + an "Open in Maps" link)
+// where the alert has them and family_links.can_view_location allows it —
+// the server redacts latitude/longitude to null otherwise, this screen just
+// renders what it's given. Not shown on "Recent alerts" cards, not asked for
+// there. Still no in-app map, no live tracking — those are Phase 3. No
+// caregiver or care-plan sections — those are Phase 2/4, owned by the
+// caregiver module.
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { listFamilyAlerts, listFamilyAlertHistory, resolveAlert } from '../api/alerts';
@@ -162,11 +167,20 @@ export function FamilyHomeScreen() {
 function AlertCard({ alert, confirming, resolving, onRequestResolve, onBackOut, onConfirmResolve }) {
   const minutesAgo = Math.max(0, Math.round((Date.now() - new Date(alert.triggeredAt)) / 60000));
   const elapsed = minutesAgo === 0 ? 'Just now' : `${minutesAgo} minute${minutesAgo === 1 ? '' : 's'} ago`;
+  const hasLocation = alert.latitude != null && alert.longitude != null;
 
   return (
     <View style={styles.card}>
       <Text style={styles.cardName}>{alert.elderlyUser.fullName}</Text>
       <Text style={styles.cardType}>{alert.alertType.toUpperCase()} · {elapsed}</Text>
+
+      {hasLocation && (
+        <Pressable onPress={() => openInMaps(alert.latitude, alert.longitude)} accessibilityRole="button">
+          <Text style={styles.locationLink}>
+            {formatCoordinates(alert.latitude, alert.longitude)} · Open in Maps
+          </Text>
+        </Pressable>
+      )}
 
       {resolving && <ActivityIndicator color={colors.text} style={styles.spinner} />}
 
@@ -192,6 +206,15 @@ function AlertCard({ alert, confirming, resolving, onRequestResolve, onBackOut, 
       )}
     </View>
   );
+}
+
+function formatCoordinates(latitude, longitude) {
+  return `${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`;
+}
+
+/** Universal Google Maps link — opens the native maps app if one is installed, else a browser. */
+function openInMaps(latitude, longitude) {
+  Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`);
 }
 
 /** "active for 4 minutes" / "active for 1 hour 12 minutes" / "active for 2 days" */
@@ -264,6 +287,7 @@ const styles = StyleSheet.create({
   },
   cardName: { fontSize: type.heading, fontWeight: '700', color: colors.text },
   cardType: { fontSize: type.small, fontWeight: '700', color: colors.danger, letterSpacing: 0.5 },
+  locationLink: { fontSize: type.small, color: colors.primary, fontWeight: '600' },
   resolveButton: {
     backgroundColor: colors.surface,
     borderRadius: 10,

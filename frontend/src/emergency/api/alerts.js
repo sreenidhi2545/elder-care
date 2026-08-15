@@ -15,9 +15,16 @@ import { apiRequest } from '../../shared/api/client';
  * includes the existing alert on the error. That is not a failure to show the
  * user — see ElderlyHomeScreen, which treats it as reassurance ("help is
  * already on the way") rather than an error.
+ *
+ * @param {{ latitude: number, longitude: number } | null} [location] Captured
+ *   at press time, best-effort — omit entirely if no fix was available in
+ *   time. Never wait on this to fire the alert; see ElderlyHomeScreen.
  */
-export function createSosAlert() {
-  return apiRequest('/emergency/alerts', { method: 'POST' });
+export function createSosAlert(location) {
+  return apiRequest('/emergency/alerts', {
+    method: 'POST',
+    body: location ? { latitude: location.latitude, longitude: location.longitude } : undefined,
+  });
 }
 
 /**

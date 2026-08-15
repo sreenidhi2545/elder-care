@@ -1,7 +1,7 @@
 // ============================================================================
 // Elderly home screen — the SOS button
 //
-// Phase 1, step 1. One thing on this screen matters: getting help fast. Three
+// Phase 1, steps 1-2. One thing on this screen matters: getting help fast. Three
 // states:
 //
 //   idle       — the big SOS button
@@ -11,21 +11,36 @@
 //   active     — an alert exists on the server; shows that plainly and offers
 //                a way to cancel it, itself behind one confirmation tap.
 //
-// No GPS, no notifications — those are separate steps. See BUILD_LOG.md.
+// Phase 1, step 2 adds GPS: a "Location sharing" card (permission handling,
+// mount-time capture posted to POST /emergency/locations) and a best-effort
+// capture at SOS press time, sent inline with the alert. Never a
+// precondition — see startCountdown/fireSos below. No notifications yet —
+// that's step 3. See BUILD_LOG.md.
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { cancelAlert, createSosAlert, listAlerts } from '../api/alerts';
+import { recordLocation } from '../api/locations';
 import { ApiError, NetworkError } from '../../shared/api/client';
+import {
+  captureCurrentLocation,
+  getLocationPermissionStatus,
+  requestLocationPermission,
+} from '../../shared/location/captureLocation';
 import { useAuth } from '../../shared/auth/AuthContext';
 import { colors, spacing, type } from '../../shared/ui/theme';
 
 const COUNTDOWN_SECONDS = 5;
 const POLL_ACTIVE_MS = 10_000;
 const POLL_IDLE_MS = 20_000;
+
+// Stays under the 5-second countdown so a location fix never delays sending
+// the alert — by the time the countdown reaches zero, this has already
+// settled (a reading or null), so awaiting it in fireSos adds no wait.
+const SOS_LOCATION_TIMEOUT_MS = 4500;
 
 export function ElderlyHomeScreen() {
   const { user, signOut } = useAuth();
@@ -36,6 +51,11 @@ export function ElderlyHomeScreen() {
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
   const [banner, setBanner] = useState(null); // transient, non-scary status line
   const countdownTimer = useRef(null);
+
+  // 'checking' | 'undetermined' | 'granted' | 'denied'
+  const [locationPermission, setLocationPermission] = useState('checking');
+  const [locationShared, setLocationShared] = useState(false);
+  const sosLocationRef = useRef(null); // in-flight capture promise during the countdown
 
   const stopCountdown = useCallback(() => {
     if (countdownTimer.current) {
@@ -81,12 +101,53 @@ export function ElderlyHomeScreen() {
   useEffect(() => stopCountdown, [stopCountdown]);
 
   // ---------------------------------------------------------------------
+  // Location sharing — foreground, one-shot on mount if already granted.
+  // No background/periodic tracking here; that's continuous live location,
+  // which is Phase 3's job (and needs a dev build Expo Go can't provide —
+  // see BUILD_LOG.md's open issues).
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    (async () => {
+      const status = await getLocationPermissionStatus();
+      setLocationPermission(status);
+      if (status === 'granted') {
+        await captureAndShareLocation();
+      }
+    })();
+  }, []);
+
+  async function captureAndShareLocation() {
+    const location = await captureCurrentLocation();
+    if (!location) return;
+    try {
+      await recordLocation(location);
+      setLocationShared(true);
+    } catch {
+      // Background enrichment — a failed share here is not something to
+      // alarm an elderly user about. It will simply try again next visit.
+    }
+  }
+
+  async function handleEnableLocationSharing() {
+    const status = await requestLocationPermission();
+    setLocationPermission(status);
+    if (status === 'granted') {
+      await captureAndShareLocation();
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // Pressing SOS
   // ---------------------------------------------------------------------
 
   function startCountdown() {
     setCountdown(COUNTDOWN_SECONDS);
     setPhase('confirming');
+
+    // Started now, not awaited until fireSos — see SOS_LOCATION_TIMEOUT_MS.
+    // If permission isn't granted this resolves to null immediately, which
+    // is exactly the "fire without a location" path.
+    sosLocationRef.current = captureCurrentLocation({ timeoutMs: SOS_LOCATION_TIMEOUT_MS });
 
     countdownTimer.current = setInterval(() => {
       setCountdown((n) => {
@@ -107,8 +168,11 @@ export function ElderlyHomeScreen() {
 
   async function fireSos() {
     setPhase('sending');
+    // Already settled by now — SOS_LOCATION_TIMEOUT_MS is shorter than the
+    // countdown that just finished — so this await does not delay sending.
+    const location = await (sosLocationRef.current ?? Promise.resolve(null));
     try {
-      const { alert: created } = await createSosAlert();
+      const { alert: created } = await createSosAlert(location);
       setAlert(created);
       setPhase('active');
     } catch (err) {
@@ -191,6 +255,11 @@ export function ElderlyHomeScreen() {
               </Pressable>
               <Text style={styles.helpText}>Press for help</Text>
               <Text style={styles.subText}>You'll have 5 seconds to cancel before it sends.</Text>
+              <LocationSharingCard
+                permission={locationPermission}
+                shared={locationShared}
+                onEnable={handleEnableLocationSharing}
+              />
             </>
           )}
 
@@ -274,6 +343,54 @@ function ActiveAlert({ alert, phase, onRequestCancel, onBackOut, onConfirmCancel
   );
 }
 
+/**
+ * The plain-language explanation the OS permission prompt itself doesn't
+ * give — shown before asking, per Phase 1 step 2's requirement. Never blocks
+ * the SOS button in any state; this is a small card underneath it, not a gate
+ * in front of it.
+ */
+function LocationSharingCard({ permission, shared, onEnable }) {
+  if (permission === 'checking') return null;
+
+  if (permission === 'granted') {
+    return (
+      <View style={styles.locationCard}>
+        <Text style={styles.locationText}>
+          {shared
+            ? 'Location sharing is on — your family can see where you are if you press SOS.'
+            : 'Location sharing is on. Could not get a fix just now — will try again next time you open the app.'}
+        </Text>
+      </View>
+    );
+  }
+
+  if (permission === 'denied') {
+    return (
+      <View style={styles.locationCard}>
+        <Text style={styles.locationText}>
+          Location sharing is off. SOS still works — your family just won't see where you are.
+        </Text>
+        <Pressable onPress={() => Linking.openSettings()} accessibilityRole="button">
+          <Text style={styles.locationLink}>Open settings to turn it on</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  // 'undetermined'
+  return (
+    <View style={styles.locationCard}>
+      <Text style={styles.locationText}>
+        ElderCare can share your location so your family can see where you are if you press SOS.
+        This only happens on this device.
+      </Text>
+      <Pressable onPress={onEnable} accessibilityRole="button">
+        <Text style={styles.locationLink}>Enable location sharing</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   content: { flex: 1, padding: spacing.lg, gap: spacing.md },
@@ -303,6 +420,18 @@ const styles = StyleSheet.create({
   sosButtonText: { fontSize: 56, fontWeight: '800', color: colors.surface, letterSpacing: 2 },
   helpText: { fontSize: type.heading, fontWeight: '700', color: colors.text },
   subText: { fontSize: type.body, color: colors.textMuted, textAlign: 'center', maxWidth: 280 },
+
+  locationCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    gap: spacing.sm,
+    maxWidth: 320,
+  },
+  locationText: { fontSize: type.small, color: colors.textMuted, textAlign: 'center' },
+  locationLink: { fontSize: type.small, color: colors.primary, fontWeight: '700', textAlign: 'center' },
 
   overlay: { flex: 1, backgroundColor: 'rgba(17,24,39,0.85)', alignItems: 'center', justifyContent: 'center' },
   overlayCard: { alignItems: 'center', gap: spacing.lg, padding: spacing.xl },

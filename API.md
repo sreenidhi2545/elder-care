@@ -1,11 +1,11 @@
 # ElderCare — API Contract
 
-**Version:** 0.2 — Phase 0 (authentication) + Phase 1 step 1 (SOS button and alert record)
+**Version:** 0.3 — Phase 0 (authentication) + Phase 1 steps 1-2 (SOS button, alert record, GPS capture)
 **Base URL (development):** `http://localhost:5000`
 
 This document is the agreement between the backend and the mobile app. Every endpoint the app is allowed to call is listed here. If you add an endpoint, add it to this file in the same Pull Request. If you need an endpoint that does not exist yet, raise it in the group rather than working around it.
 
-The authentication endpoints and the emergency alert endpoints exist today. GPS ingestion, emergency contact notification, geofencing, and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
+The authentication endpoints, the emergency alert endpoints, and GPS capture exist today. Emergency contact notification, geofencing, and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
 
 ---
 
@@ -130,6 +130,7 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `POST` | `/emergency/alerts/:id/resolve` | Bearer | "This is handled" — owner or a permitted family member |
 | `GET` | `/emergency/family/alerts` | Bearer + `family` | Active alerts for elderly users the caller is linked to |
 | `GET` | `/emergency/family/alerts/history` | Bearer + `family` | Resolved/cancelled alerts from the last 7 days, same linked users |
+| `POST` | `/emergency/locations` | Bearer | Record one GPS reading |
 
 ---
 
@@ -392,11 +393,20 @@ The 50 most recently created users. Admin only.
 
 ## Emergency alerts
 
-Phase 1, step 1: the SOS button and the alert record only. Nothing here captures GPS (`latitude`/`longitude` on every alert are `null` for now) or sends a notification to anyone — those are separate steps and will extend this section when built. Every one of these endpoints requires `Authorization: Bearer <accessToken>`; the five error codes listed under [`GET /auth/me`](#get-authme) apply here too and are not repeated below.
+Phase 1, steps 1-2: the SOS button, the alert record, and GPS capture. Notification fanout is a separate step (3) and will extend this section when built. Every one of these endpoints requires `Authorization: Bearer <accessToken>`; the five error codes listed under [`GET /auth/me`](#get-authme) apply here too and are not repeated below.
 
 ### `POST /emergency/alerts`
 
-Presses SOS for the signed-in user. `alertType` is always `sos`, `severity` is always `critical` — this button does not ask the person pressing it to grade their own emergency. No request body.
+Presses SOS for the signed-in user. `alertType` is always `sos`, `severity` is always `critical` — this button does not ask the person pressing it to grade their own emergency.
+
+**Request body — entirely optional**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `latitude` | number | no | -90 to 90. Must be sent with `longitude` |
+| `longitude` | number | no | -180 to 180. Must be sent with `latitude` |
+
+Captured on the device at press time and written straight onto the alert — **never a precondition.** An SOS must fire whether or not a location fix was available; the app does not wait on GPS to send this request. Omit both fields entirely if no fix was captured in time; do not send one without the other.
 
 **Response `201`**
 
@@ -428,6 +438,7 @@ Presses SOS for the signed-in user. `alertType` is always `sos`, `severity` is a
 
 | Status | Code | When |
 |---|---|---|
+| `400` | `validation_failed` | `latitude`/`longitude` out of range, or only one of the pair was sent |
 | `409` | `sos_already_active` | The caller already has an active SOS alert. The response carries `alert`, the existing one, in the same shape as above |
 
 **`sos_already_active` is not a failure to show the person pressing the button.** A second press while one alert is already open almost always means the same emergency pressed twice, not a second one — the app should read this as reassurance ("help is already on the way"), never as an error screen. See `ElderlyHomeScreen.js`.
@@ -507,6 +518,8 @@ Active alerts for every elderly user the caller has an `active` `family_links` r
 
 **Every alert for every actively-linked elderly user is included**, regardless of `can_acknowledge_alerts` — a view-only family member still needs to know an emergency is happening, they just cannot close it out. Each alert carries `canAcknowledge` so the app knows whether to offer a "mark resolved" button; the `resolve` endpoint enforces the same permission server-side regardless of what the app shows.
 
+**`latitude`/`longitude` are redacted to `null` when the caller's `family_links.can_view_location` is `false`**, regardless of what's actually stored on the alert — enforced in the query, not left to the app to hide. Each alert also carries `canViewLocation` so the app can tell "no fix yet" apart from "you don't have permission to see it," though today it doesn't need to: it just renders whatever coordinates it's given.
+
 **Response `200`**
 
 ```json
@@ -520,10 +533,13 @@ Active alerts for every elderly user the caller has an `active` `family_links` r
       "alertType": "sos",
       "status": "active",
       "severity": "critical",
+      "latitude": "12.971599",
+      "longitude": "77.594566",
       "triggeredAt": "2026-08-15T06:51:50.230Z",
       "...": "remaining fields as in POST /emergency/alerts",
       "elderlyUser": { "fullName": "Test Elderly", "phone": "+919000000001" },
-      "canAcknowledge": true
+      "canAcknowledge": true,
+      "canViewLocation": true
     }
   ]
 }
@@ -542,6 +558,8 @@ Active alerts for every elderly user the caller has an `active` `family_links` r
 Resolved and cancelled alerts from the last 7 days for every elderly user the caller has an `active` `family_links` row with. Role-gated to `family`. Same view-only-still-sees gating as `GET /emergency/family/alerts` — `can_acknowledge_alerts` does not affect what's visible here, only whether an alert could have been resolved by this family member while it was active.
 
 The point of this endpoint is that a cancelled or resolved SOS does not just vanish from `GET /emergency/family/alerts` with no trace — a family member should be able to see that their relative pressed SOS and how it ended, even if they weren't watching at the time.
+
+**Same `can_view_location` redaction as the active list** — `latitude`/`longitude` come back `null` and `canViewLocation` is `false` when the link doesn't grant it. Applied consistently even though the family screen doesn't currently render coordinates on history cards, only active ones — the permission is about the data, not about which screen happens to display it.
 
 **Query parameters**
 
@@ -570,7 +588,8 @@ The 7-day window is fixed and not a query parameter.
       "...": "remaining fields as in POST /emergency/alerts",
       "elderlyUser": { "fullName": "Test Elderly", "phone": "+919000000001" },
       "resolvedByName": "Test Elderly",
-      "resolvedByIsSelf": true
+      "resolvedByIsSelf": true,
+      "canViewLocation": true
     }
   ]
 }
@@ -584,6 +603,52 @@ The 7-day window is fixed and not a query parameter.
 |---|---|---|
 | `400` | `validation_failed` | `limit` is not a positive whole number |
 | `403` | `insufficient_role` | The caller's role is not `family` |
+
+---
+
+### `POST /emergency/locations`
+
+Records one GPS reading for the caller. Phase 1, step 2: capture and storage only — nothing reads this back yet (no map UI, no geofencing; those are Phase 3). Not role-gated at the API layer, same reasoning as `POST /emergency/alerts`: scoped to the caller's own account, restricted to the elderly screen by the app's UI, not by the server.
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `latitude` | number | **yes** | -90 to 90 |
+| `longitude` | number | **yes** | -180 to 180 |
+| `accuracyMeters` | number | no | Non-negative |
+| `batteryLevel` | integer | no | 0-100 |
+| `recordedAt` | string | no | ISO 8601. When the device took the fix, if different from when this request arrives. Defaults to the time the server receives it |
+
+```json
+{ "latitude": 12.971599, "longitude": 77.594566, "accuracyMeters": 12.5, "batteryLevel": 73 }
+```
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "location": {
+    "id": "9262f6e5-a169-44d9-9e02-cb794dbc2742",
+    "userId": "68e6ca9c-a980-4509-b01d-cdc4c633bf95",
+    "latitude": "12.971599",
+    "longitude": "77.594566",
+    "accuracyMeters": "12.50",
+    "batteryLevel": 73,
+    "recordedAt": "2026-08-15T13:17:14.552Z",
+    "createdAt": "2026-08-15T13:17:14.552Z"
+  }
+}
+```
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | `latitude`/`longitude` missing, out of range, or only one of the pair sent; or `accuracyMeters`, `batteryLevel`, `recordedAt` fail their own rules |
+
+**This is unrelated to the location the app may send with `POST /emergency/alerts`.** That request writes straight onto the alert's own `latitude`/`longitude` for durability past the 30-day location purge; it does not create a row here, and this endpoint does not touch `alerts`. Two separate concerns: general location history, and what an alert remembers about itself.
 
 ---
 
@@ -630,7 +695,7 @@ Everything below is planned but does not exist. Do not code against it — it wi
 
 | Area | Phase | Owner |
 |---|---|---|
-| GPS ingestion, emergency contacts, notification fanout (SMS/call/push) | 1 | Sree |
+| Emergency contact notification fanout (SMS/call/push), escalation on no acknowledgement | 1 | Sree |
 | Caregiver profiles, search, booking, scheduling, attendance | 2 | [Teammate B] |
 | Geofences, breach detection, live location over WebSockets | 3 | Sree |
 | Care plans, activity reports, tasks, reviews | 4 | [Teammate B] |
@@ -638,4 +703,4 @@ Everything below is planned but does not exist. Do not code against it — it wi
 | Device token registration for push notifications | 1 | Sree |
 | Family links — invitations, approval, permissions | 1 | Sree |
 
-**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history` — see the "Emergency alerts" section above. `family_links` rows themselves must still be created directly (no invite/approve endpoint yet), so the family screen has nothing to show until one exists.
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations` — see the "Emergency alerts" section above. `family_links` rows themselves must still be created directly (no invite/approve endpoint yet), so the family screen has nothing to show until one exists.

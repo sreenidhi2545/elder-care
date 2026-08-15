@@ -486,3 +486,53 @@ Backend, against the running server and the real `eldercare` database: empty his
 Frontend: `npx expo export --platform android` bundled cleanly, 839 modules, same check as every prior step.
 
 **Not verified on a device** — same gap as the rest of Phase 1 step 1. Nobody has scrolled a real family dashboard and read a "Recent alerts" card at arm's length yet.
+
+---
+
+## 2026-08-15 — Phase 1, step 2: GPS location
+
+Scope, deliberately: capture and storage only. No geofencing (Phase 3), no map UI, no notifications (step 3). Two things: a general-purpose location endpoint, and location captured specifically at SOS press time and written onto the alert itself.
+
+### New dependencies — `expo-location`, `expo-battery`
+
+Both added via `npx expo install` so they match SDK 54, same as every other native module in this project. `expo-location`'s config plugin was added to `app.json` with a custom `locationWhenInUsePermission` string — inert under Expo Go today (plugin config only applies on prebuild/dev-client), but correct and in place for when the dev build the project already knows is coming (see the 2026-08-12 SDK-downgrade entry's open issues) actually happens. Foreground-only; background location needs that same dev build and is not attempted here.
+
+### Backend — `backend/emergency/locations.js`, new file; `alerts.js`, `validate.js`, `routes.js` extended
+
+**`POST /emergency/locations`, a new endpoint — writes one row to the existing `locations` table.** `latitude`/`longitude` required, `accuracyMeters`/`batteryLevel`/`recordedAt` optional. Not role-gated at the API layer, same reasoning as `POST /emergency/alerts` from step 1: scoped to the caller's own account, restricted to the elderly screen by the app's UI rather than the server. `recordedAt` defaults to `now()` but accepts the device's own fix time, since a reading can be taken a moment before the request actually arrives.
+
+**`POST /emergency/alerts` gains optional `latitude`/`longitude`, written straight onto the alert's own columns in the same `INSERT`.** Both required together if either is sent; both stay `null` if omitted, exactly as before this step.
+
+**Rejected: also inserting a `locations` row for the SOS-time capture and linking it via `alerts.location_id`.** The schema comment already explains why alerts carry their own copy — the FK exists in the design, but nothing today reads `location_id`, and creating a row nothing joins against is complexity with no consumer. `location_id` stays `NULL`. If something later needs the fuller reading (accuracy, battery) that was captured at SOS time and not just the coordinates, that's a small addition then, not a redesign now.
+
+**Never a precondition — this was the load-bearing requirement, not a nice-to-have.** `validateSosAlertBody` treats a missing location as entirely valid, not an error; the endpoint has no code path where a location problem prevents the `INSERT`. The client-side half of "never delay" is in the frontend section below — the two halves only work together.
+
+**`family_links.can_view_location` gating added to both `listActiveFamilyAlerts` and `listFamilyAlertHistory`.** Both queries now select the flag; a new `withLocationGate` helper redacts `latitude`/`longitude` to `null` and adds a `canViewLocation` field when it's `false` — same shape and same reasoning as `canAcknowledge` from step 1, a different permission gating a different action (viewing vs. closing). Enforced in the query layer so a view-only-location family member can't see coordinates no matter what the app does with the response. Applied to **both** endpoints — active and history — even though the family screen (below) only renders coordinates on active cards today. The permission is about the data, not about which screen currently happens to display it; leaving history ungated because nothing reads it yet would be a gap waiting to be found the same way the missing history section itself was found in the previous entry.
+
+### Frontend — `shared/location/captureLocation.js` (new), `emergency/api/locations.js` (new), `emergency/api/alerts.js`, both home screens
+
+**One shared capture helper, not two separate implementations.** `captureCurrentLocation({ timeoutMs })` wraps permission-checking, `Location.getCurrentPositionAsync`, and a best-effort `expo-battery` read behind a single function that **never throws** — permission denied, no fix in time, GPS off, or a genuine hardware error all just resolve to `null`. Every caller branches on "did I get a reading," nothing else. Used from two call sites with different urgency:
+
+- **`ElderlyHomeScreen`'s "Location sharing" card** — a plain-language explanation shown *before* the OS permission prompt, per the requirement, not left to the system dialog's own generic wording. Three states: not-yet-asked (rationale + "Enable" button), granted (auto-captures once on mount, posts to `POST /emergency/locations`, fire-and-forget — a failed background share is not something to alarm an elderly user about), denied (reassurance that SOS still works, plus an "Open settings" link, since `expo-location` won't re-prompt a permission the user already said no to). **Deliberately foreground, one-shot on mount — no periodic or background capture.** That's continuous live tracking, which is explicitly Phase 3's job, and would need the dev build this project doesn't have yet regardless. Logged below rather than half-built here.
+
+- **The SOS countdown** — capture starts the instant the 5-second countdown begins, with an internal timeout (4.5s) shorter than the countdown itself. By the time the countdown reaches zero and `fireSos` runs, the capture promise has *already settled* — a reading or `null` — so awaiting it there adds no perceptible delay. This was the actual hard requirement: not "try to get a location," but "never let trying be the reason the button is slow." Structuring it as "start early, bound the wait to less than the delay that already exists" rather than "await, with a timeout, at send time" is what makes both true at once.
+
+**Family dashboard — `Open in Maps`, confirmed with you as an addition beyond "shows coordinates."** Active-alert cards with a location show the raw coordinates plus a `Linking.openURL` deep link to Google Maps. No map library, no in-app map view — one `Pressable`. Raw numbers on an emergency card are not very actionable without it. Not added to "Recent alerts" history cards — not asked for, and the API's `can_view_location` gating (above) is the part of this that needed to be consistent everywhere; the UI showing it everywhere is a separate, smaller decision that can wait to be asked for.
+
+### Verified
+
+Backend, against the running server and the real `eldercare` database: `POST /emergency/locations` writes a row and returns it; missing `longitude`, an out-of-range `latitude`, and an out-of-range `batteryLevel` each return `400 validation_failed` with the right field named; `POST /emergency/alerts` with a valid `{latitude, longitude}` stores them on the alert; `POST /emergency/alerts` with **no body at all** still returns `201` — confirming the "never a precondition" requirement actually holds server-side, not just in the client's intent. `family_links.can_view_location` flipped to `false` on the test link: the active list redacted `latitude`/`longitude` to `null` and returned `canViewLocation: false`; the alert was then resolved and the **history** endpoint showed the same redaction on the same row, confirming the gating survives an alert changing status. Flipped back to `true` and confirmed coordinates reappear. All test rows (two alerts, one location) deleted afterwards.
+
+Frontend: `npx expo export --platform android` bundled cleanly, 851 modules (up from 839 — the two new native packages), no unresolved imports.
+
+**Not verified on a device.** This is the same gap flagged on every step so far, but it matters more here: permission prompts, `Linking.openSettings()`, and actual GPS hardware are exactly the things a bundle check cannot prove. Phase 1 step 1 (the SOS button itself) *has* now been verified on a device per your note at the top of this task — this step has not yet had that pass.
+
+### Left open — for step 3
+
+**There is currently no way for an SOS to reach anyone who isn't already looking at the dashboard, and no escalation if nobody acknowledges it.** Everything built in steps 1 and 2 assumes a family member happens to have the app open and polling. Step 3 needs to close both gaps:
+
+- **Notification fanout in `emergency_contacts.priority` order** — SMS/call/push to the first contact, not a blast to everyone at once. The table already has `priority`, `notify_by_sms`, `notify_by_call`, `notify_by_push` per contact; none of it is read by any code yet.
+- **Escalation to the next contact if unacknowledged.** What "unacknowledged" means and how long to wait before escalating is not decided — that's step 3's design question, not answered here.
+- **Alerts must not auto-expire.** An unacknowledged alert stays `active` indefinitely; only a human action (`cancel` or `resolve`, both already built) closes it. Escalation adds more attempts to reach someone, not a timeout that silently closes the alert if no one responds — the two are easy to conflate and must not be.
+
+Not designed further here — flagged so it isn't lost, decided when step 3 actually starts.

@@ -55,13 +55,19 @@ export async function findActiveSosAlert(userId) {
  * Creates a new SOS alert. Does not check for an existing active one — that
  * is a business rule, decided by the caller in routes.js, not a fact about
  * how to write a row.
+ *
+ * `location` is best-effort and optional — captured on the device at press
+ * time, but an SOS must fire whether or not a GPS fix was available. Written
+ * directly onto the alert's own latitude/longitude, not a linked `locations`
+ * row: nothing reads `location_id` today, and this is the copy that has to
+ * outlive the 30-day location purge anyway. See BUILD_LOG.md.
  */
-export async function createSosAlert(userId) {
+export async function createSosAlert(userId, location) {
   const { rows } = await query(
-    `INSERT INTO alerts (user_id, alert_type, status, severity, triggered_at)
-     VALUES ($1, 'sos', 'active', $2, now())
+    `INSERT INTO alerts (user_id, alert_type, status, severity, triggered_at, latitude, longitude)
+     VALUES ($1, 'sos', 'active', $2, now(), $3, $4)
      RETURNING *`,
-    [userId, SOS_SEVERITY]
+    [userId, SOS_SEVERITY, location?.latitude ?? null, location?.longitude ?? null]
   );
   return rows[0];
 }
@@ -144,6 +150,21 @@ export async function findFamilyLink(familyUserId, elderlyUserId) {
 }
 
 /**
+ * Redacts coordinates when the viewer's family_links row doesn't grant
+ * can_view_location — enforced here, in the query layer, not left to the
+ * screen to hide. canAcknowledge already works this way for a different
+ * permission; this is the same pattern for a different flag.
+ */
+function withLocationGate(publicAlert, canViewLocation) {
+  return {
+    ...publicAlert,
+    latitude: canViewLocation ? publicAlert.latitude : null,
+    longitude: canViewLocation ? publicAlert.longitude : null,
+    canViewLocation,
+  };
+}
+
+/**
  * Active alerts for every elderly user linked to this family member with an
  * 'active' family_links row. can_acknowledge_alerts is not filtered here —
  * decision (B): a view-only family member still sees that an emergency is
@@ -155,7 +176,8 @@ export async function listActiveFamilyAlerts(familyUserId) {
     `SELECT a.*,
             u.full_name AS elderly_full_name,
             u.phone AS elderly_phone,
-            fl.can_acknowledge_alerts
+            fl.can_acknowledge_alerts,
+            fl.can_view_location
        FROM alerts a
        JOIN family_links fl ON fl.elderly_user_id = a.user_id
        JOIN users u ON u.id = a.user_id
@@ -166,11 +188,16 @@ export async function listActiveFamilyAlerts(familyUserId) {
     [familyUserId]
   );
 
-  return rows.map((row) => ({
-    ...toPublicAlert(row),
-    elderlyUser: { fullName: row.elderly_full_name, phone: row.elderly_phone },
-    canAcknowledge: row.can_acknowledge_alerts,
-  }));
+  return rows.map((row) =>
+    withLocationGate(
+      {
+        ...toPublicAlert(row),
+        elderlyUser: { fullName: row.elderly_full_name, phone: row.elderly_phone },
+        canAcknowledge: row.can_acknowledge_alerts,
+      },
+      row.can_view_location
+    )
+  );
 }
 
 /**
@@ -191,7 +218,8 @@ export async function listFamilyAlertHistory(familyUserId, { limit }) {
     `SELECT a.*,
             u.full_name AS elderly_full_name,
             u.phone AS elderly_phone,
-            r.full_name AS resolved_by_name
+            r.full_name AS resolved_by_name,
+            fl.can_view_location
        FROM alerts a
        JOIN family_links fl ON fl.elderly_user_id = a.user_id
        JOIN users u ON u.id = a.user_id
@@ -205,10 +233,15 @@ export async function listFamilyAlertHistory(familyUserId, { limit }) {
     [familyUserId, HISTORY_WINDOW_DAYS, limit]
   );
 
-  return rows.map((row) => ({
-    ...toPublicAlert(row),
-    elderlyUser: { fullName: row.elderly_full_name, phone: row.elderly_phone },
-    resolvedByName: row.resolved_by_name,
-    resolvedByIsSelf: row.resolved_by === row.user_id,
-  }));
+  return rows.map((row) =>
+    withLocationGate(
+      {
+        ...toPublicAlert(row),
+        elderlyUser: { fullName: row.elderly_full_name, phone: row.elderly_phone },
+        resolvedByName: row.resolved_by_name,
+        resolvedByIsSelf: row.resolved_by === row.user_id,
+      },
+      row.can_view_location
+    )
+  );
 }
