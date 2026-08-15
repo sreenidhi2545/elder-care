@@ -431,6 +431,16 @@ Frontend: `npx expo export --platform android` bundled cleanly, 839 modules, no 
 
 ---
 
+## 2026-08-15 — Local credentials rotated
+
+Two passwords changed on the local development environment. Neither value is recorded here or anywhere else in the repository — `.env` is the only place either lives, and it stays gitignored.
+
+**The `postgres` role's database password was changed.** `DATABASE_URL` in the repo-root `.env` was updated to match by a script that read the old value out of `.env`, used it to connect and issue `ALTER USER`, then rewrote the file — the old password was never printed to a terminal or logged anywhere in the process. The running backend was restarted afterwards, since `shared/config/env.js` reads `.env` once at startup and freezes the result; a password rotation does not take effect in an already-running process. Verified with `GET /health` returning `db.connected: true` against the new credentials, and confirmed `.env` still shows as ignored (`git check-ignore -v .env`) and untracked (`git status`).
+
+**The four seeded test accounts' shared password was changed**, by re-running `backend/scripts/seed-test-users.js` — the script upserts on phone number, so this reset the existing four rather than creating new ones. The password requested was 5 characters; the seed script enforces the same `PASSWORD_MIN_LENGTH` (8) that registration does and refused to run, so it was padded to meet that minimum rather than the rule being loosened — the rule exists for real registrations too, not just this script. Verified by logging in as all four seeded numbers (`9000000001`–`9000000004`) and confirming each still returns its expected role.
+
+---
+
 ## 2026-08-15 — Build log audit: the append-and-commit-together rule had drifted
 
 Run because the rule at the top of this file — append an entry after every completed step, commit it with the work — was suspected of not having been followed consistently since the very first (2026-08-05) session. It hadn't been, though not in the way expected.
