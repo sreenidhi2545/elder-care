@@ -4,6 +4,8 @@ A running record of what was built, when, and why. Each entry says what changed,
 
 **How to use this file:** append an entry after every completed step, and commit the log update in the same commit as the work it describes. Newest entries go at the bottom. Write it so someone who was not watching the build can follow it — plain English, no shorthand.
 
+**Rule, stated plainly because it has drifted before (see the 2026-08-15 audit entry below): every commit that changes code also updates this file, in that same commit.** A log-only commit (fixing a stale entry, backfilling a gap) is fine. A code commit with no log entry is not — not even for something that feels too small to write up. If it's small, the entry is one sentence.
+
 Entries before 2026-08-12 were reconstructed from the git history and the files themselves, so they record the decisions but not always the discussion behind them.
 
 ---
@@ -332,6 +334,8 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 - **`caregivers.average_rating` and `total_reviews`** are not maintained by the database. Whoever builds reviews in Phase 4 must recalculate them in the same transaction that writes the review.
 - **Overlapping caregiver visits** are not prevented by the database, only identical start times. The application has to check.
 - **Identity document numbers** are deliberately not stored. If the client requires them, the answer is a hash plus the document in a separate access-controlled store — not a plain column.
+- **Whether `can_acknowledge_alerts` should also permit cancelling an alert, not just resolving it.** Left open deliberately at your request — see the 2026-08-15 entry below for the case on each side. A one-line change in `backend/emergency/routes.js` either way.
+- **The SOS button flow is unverified on a real device.** Bundling proves it compiles; it does not prove the 5-second countdown, the confirm-to-cancel step, or the polling behaviour hold up under an actual press on an actual phone. See the 2026-08-15 entry below.
 
 ---
 
@@ -347,9 +351,17 @@ It states plainly near the top that this is an Expo/React Native mobile app, not
 
 ---
 
+## 2026-08-14 — Lockfiles updated (`9b495c5`)
+
+**Backfilled 2026-08-15** — this commit had no log entry at the time; see the audit entry below.
+
+`backend/package-lock.json` and `frontend/package-lock.json` updated to match `package.json` after routine dependency work earlier the same day. No dependency was added or removed and no version was deliberately bumped; this is `npm install` recording an already-current lockfile, not a decision. Twelve lines changed, nothing to verify beyond `npm install` completing clean.
+
+---
+
 ## 2026-08-14 — Merge conflict: a Vite scaffold under `frontend/`
 
-**What happened.** Before the Expo shell (2026-08-12, above) was merged, a teammate had separately scaffolded a Vite web app directly into `frontend/` on `main` — `frontend/index.html`, `frontend/src/main.jsx` (a plain `react-dom` app), and a stray root-level `package-lock.json` with no matching root `package.json`, evidently left over from running `npm install` at the repository root by mistake. Landing that on `main` before the Expo work merged meant the pull request from `feature/emergency` into `main` conflicted on `frontend/package.json` and `frontend/package-lock.json` — one side had Expo and React Native, the other had Vite and `react-dom` for the same file.
+**What happened.** Before the Expo shell (2026-08-12, above) was merged, a teammate had separately scaffolded a Vite web app directly into `frontend/` on `main` (`2c5a24e`, merged via PR #2 from `feature/caregiver`) — `frontend/index.html`, `frontend/src/main.jsx` (a plain `react-dom` app), and a stray root-level `package-lock.json` with no matching root `package.json`, evidently left over from running `npm install` at the repository root by mistake. Landing that on `main` before the Expo work merged meant the pull request from `feature/emergency` into `main` conflicted on `frontend/package.json` and `frontend/package-lock.json` — one side had Expo and React Native, the other had Vite and `react-dom` for the same file.
 
 **Why Expo won outright, not a merge of both.** This project is a mobile app that runs on a phone through Expo Go — see `SETUP.md`'s opening section. A web frontend under the same folder is not a second flavour of the same app; Expo and Vite cannot coexist in one `package.json`, and nothing in any project document describes a web client. The Vite scaffold was scope creep from before the module folders existed, not a parallel feature.
 
@@ -358,3 +370,20 @@ It states plainly near the top that this is an Expo/React Native mobile app, not
 Rather than discard an already-pushed merge commit and force-push a from-scratch redo, the fix was applied on top of it: pull the existing merge, delete the three leftover files, and push normally as a fast-forward. Confirmed afterwards — `git grep` for `vite` and `react-dom` across the tracked tree turns up nothing but coincidental substring matches (`invited_by`, a base64 hash), `frontend/package.json` lists only `expo` and `react-native`, and `npx expo config` still resolves `sdkVersion: '54.0.0'`. `backend/shared/db/schema.sql` was left untouched — the teammate's encoding fix for the mangled em dash (`9d169cd`, already covered by 2026-08-08 above) came through the merge cleanly and stays.
 
 **Worth knowing for next time, with three people on one repository:** an automated conflict-resolution pass (Copilot's or otherwise) can fix the conflict markers correctly and still leave scope creep behind, because non-conflicting new files never get its attention. Reviewing "does this pull request still contain files it shouldn't" is a separate question from "does this pull request have conflicts," and answering the first one is still a human's job even after the second is automated away.
+
+---
+
+## 2026-08-15 — Build log audit: the append-and-commit-together rule had drifted
+
+Run because the rule at the top of this file — append an entry after every completed step, commit it with the work — was suspected of not having been followed consistently since the very first (2026-08-05) session. It hadn't been, though not in the way expected.
+
+**Method:** `git log --oneline -- BUILD_LOG.md` (commits that actually touched this file) compared against the full commit history on this branch (`git log --oneline --all`).
+
+**What the comparison found:**
+
+- **Every commit before 2026-08-12 is a non-issue.** None of them individually touch `BUILD_LOG.md`, but the file's own header already discloses this — those entries were written in one pass, reconstructed from the git history and the code, not committed alongside the work in real time. Disclosed drift isn't silent drift.
+- **One real, undisclosed gap: `9b495c5` ("Update lockfiles", 2026-08-14).** A routine lockfile-sync commit with no log entry at all, not mentioned anywhere in the file. Small — 12 lines, no decisions — but the rule doesn't carve out an exception for small. Backfilled above.
+- **One traceability gap, not a content gap: `2c5a24e`** (the Vite-scaffold commit, merged from `feature/caregiver` via PR #2). The event it caused was already fully narrated in the "Merge conflict: a Vite scaffold" entry above, just without the commit hash tying the narrative to the actual commit. Added the hash for precision; no content was missing.
+- **The largest gap: the SOS button feature (Phase 1, step 1) and the credential rotation, both dated 2026-08-15 above, existed only in the uncommitted working tree at the time of this audit.** The code (`backend/emergency/alerts.js`, `routes.js`, `validate.js`, the frontend `emergency/api/` client, both home screens, the `API.md` update) and the matching log entries had both already been written — checked against `git reflog` and against `origin/main`'s merge history (`dafc85d`), neither of which contains any of it — but nothing had been committed. This is a stricter violation than a missing log entry: the rule assumes work gets committed *promptly*, with the log riding along: here the log was actually ahead of git, correct and complete, but sitting in a working tree with no commit at all backing it. Resolved by committing the SOS feature (code + its log entry) as one commit and the credential-rotation note (log-only, since that action left no code diff) as a separate one, both immediately after this audit entry.
+
+**Going forward:** the header above now states the rule explicitly rather than leaving it to be remembered. It's also saved to this session's persistent memory, so it doesn't depend on either the header being read or the memory alone — either should be enough on its own to catch the next drift before it reaches six commits.
