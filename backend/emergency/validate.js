@@ -37,6 +37,24 @@ export function validateListQuery(query = {}) {
   };
 }
 
+/** GET /emergency/family/alerts/history — same limit rules, no status filter (fixed server-side). */
+export function validateHistoryQuery(query = {}) {
+  const { limit } = query;
+
+  const errors = fieldErrors([
+    { when: limit !== undefined && (!/^\d+$/.test(String(limit)) || Number(limit) < 1),
+      field: 'limit', message: 'Limit must be a positive whole number.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return {
+    limit: limit === undefined ? DEFAULT_LIST_LIMIT : Math.min(Number(limit), MAX_LIST_LIMIT),
+  };
+}
+
 /** POST /emergency/alerts/:id/cancel and /resolve share this body shape. */
 export function validateCloseAlertBody(body = {}) {
   const { note } = body;

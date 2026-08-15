@@ -6,6 +6,7 @@
 //   POST /emergency/alerts/:id/cancel    "that was a mistake" — owner only
 //   POST /emergency/alerts/:id/resolve   "this is handled" — owner or family
 //   GET  /emergency/family/alerts        active alerts for linked elderly users
+//   GET  /emergency/family/alerts/history recent resolved/cancelled alerts, last 7 days
 //
 // Phase 1, step 1 only: the SOS button and the alert record. No GPS capture,
 // no notification fanout — those are separate steps. See BUILD_LOG.md.
@@ -24,8 +25,9 @@ import {
   resolveAlert,
   findFamilyLink,
   listActiveFamilyAlerts,
+  listFamilyAlertHistory,
 } from './alerts.js';
-import { validateListQuery, validateCloseAlertBody } from './validate.js';
+import { validateListQuery, validateCloseAlertBody, validateHistoryQuery } from './validate.js';
 
 export const emergencyRouter = Router();
 
@@ -138,3 +140,18 @@ emergencyRouter.get('/family/alerts', requireAuth, requireRole('family'), async 
   const alerts = await listActiveFamilyAlerts(req.user.id);
   res.json({ status: 'ok', count: alerts.length, alerts });
 });
+
+// ---------------------------------------------------------------------------
+// GET /emergency/family/alerts/history — family role only
+// ---------------------------------------------------------------------------
+
+emergencyRouter.get(
+  '/family/alerts/history',
+  requireAuth,
+  requireRole('family'),
+  async (req, res) => {
+    const { limit } = validateHistoryQuery(req.query);
+    const alerts = await listFamilyAlertHistory(req.user.id, { limit });
+    res.json({ status: 'ok', count: alerts.length, alerts });
+  }
+);

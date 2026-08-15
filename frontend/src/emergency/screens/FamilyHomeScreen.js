@@ -9,6 +9,13 @@
 // screen shows. See BUILD_LOG.md for the open question on whether
 // can_acknowledge_alerts should also allow cancelling, not just resolving.
 //
+// Below active alerts, a "Recent alerts" section shows the last 7 days of
+// resolved/cancelled alerts for the same linked elderly users — so a
+// cancelled SOS still leaves a trace instead of just disappearing. Fetched
+// alongside the active list on the same poll cadence rather than its own
+// interval; see BUILD_LOG.md for why that's an acceptable trade at this
+// scale.
+//
 // No live location, no map — those are Phase 3. No caregiver or care-plan
 // sections — those are Phase 2/4, owned by the caregiver module.
 // ============================================================================
@@ -17,7 +24,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { listFamilyAlerts, resolveAlert } from '../api/alerts';
+import { listFamilyAlerts, listFamilyAlertHistory, resolveAlert } from '../api/alerts';
 import { NetworkError } from '../../shared/api/client';
 import { useAuth } from '../../shared/auth/AuthContext';
 import { colors, spacing, type } from '../../shared/ui/theme';
@@ -29,6 +36,7 @@ export function FamilyHomeScreen() {
   const { user, signOut } = useAuth();
 
   const [alerts, setAlerts] = useState([]);
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [banner, setBanner] = useState(null);
@@ -38,8 +46,12 @@ export function FamilyHomeScreen() {
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
     try {
-      const { alerts: fetched } = await listFamilyAlerts();
-      setAlerts(fetched);
+      const [{ alerts: active }, { alerts: recent }] = await Promise.all([
+        listFamilyAlerts(),
+        listFamilyAlertHistory(),
+      ]);
+      setAlerts(active);
+      setHistory(recent);
       setBanner(null);
     } catch (err) {
       // A background poll failing should not overwrite a list that is still
@@ -129,6 +141,16 @@ export function FamilyHomeScreen() {
             />
           ))}
 
+        <Text style={styles.sectionHeading}>Recent alerts</Text>
+
+        {!loading && history.length === 0 && (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>No alerts in the past 7 days.</Text>
+          </View>
+        )}
+
+        {!loading && history.map((alert) => <HistoryCard key={alert.id} alert={alert} />)}
+
         <Pressable style={styles.signOutButton} onPress={signOut} accessibilityRole="button">
           <Text style={styles.signOutText}>Sign out</Text>
         </Pressable>
@@ -172,6 +194,51 @@ function AlertCard({ alert, confirming, resolving, onRequestResolve, onBackOut, 
   );
 }
 
+/** "active for 4 minutes" / "active for 1 hour 12 minutes" / "active for 2 days" */
+function formatActiveDuration(triggeredAt, resolvedAt) {
+  const totalMinutes = Math.max(0, Math.round((new Date(resolvedAt) - new Date(triggeredAt)) / 60000));
+
+  if (totalMinutes < 1) return 'Active for less than a minute';
+  if (totalMinutes < 60) {
+    return `Active for ${totalMinutes} minute${totalMinutes === 1 ? '' : 's'}`;
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) {
+    const hourPart = `${hours} hour${hours === 1 ? '' : 's'}`;
+    return minutes === 0 ? `Active for ${hourPart}` : `Active for ${hourPart} ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `Active for ${days} day${days === 1 ? '' : 's'}`;
+}
+
+/** Who closed it and how — cancel is always the alert owner; resolve can be either. */
+function formatEndedBy(alert) {
+  const name = alert.resolvedByName ?? alert.elderlyUser.fullName;
+
+  if (alert.status === 'cancelled') {
+    return `Cancelled by ${name} — they said it was a mistake`;
+  }
+  return alert.resolvedByIsSelf
+    ? `Marked resolved by ${name}`
+    : `Resolved by ${name} (family)`;
+}
+
+function HistoryCard({ alert }) {
+  const cancelled = alert.status === 'cancelled';
+
+  return (
+    <View style={[styles.historyCard, cancelled ? styles.historyCardCancelled : styles.historyCardResolved]}>
+      <Text style={styles.cardName}>{alert.elderlyUser.fullName}</Text>
+      <Text style={styles.historyMeta}>Triggered {new Date(alert.triggeredAt).toLocaleString()}</Text>
+      <Text style={styles.historyMeta}>{formatActiveDuration(alert.triggeredAt, alert.resolvedAt)}</Text>
+      <Text style={styles.historyEndedBy}>{formatEndedBy(alert)}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.md, gap: spacing.md },
@@ -210,6 +277,16 @@ const styles = StyleSheet.create({
   confirmNoButtonText: { fontSize: type.body, fontWeight: '600', color: colors.text },
   confirmYesButton: { backgroundColor: colors.success, borderRadius: 10, paddingVertical: spacing.sm, alignItems: 'center' },
   confirmYesButtonText: { fontSize: type.body, fontWeight: '700', color: colors.surface },
+  historyCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: spacing.md,
+    gap: 4,
+  },
+  historyCardResolved: { backgroundColor: '#DCFCE7', borderColor: '#BBF7D0' },
+  historyCardCancelled: { backgroundColor: colors.surface, borderColor: colors.border },
+  historyMeta: { fontSize: type.small, color: colors.textMuted },
+  historyEndedBy: { fontSize: type.small, color: colors.text, fontWeight: '600' },
   signOutButton: { alignItems: 'center', paddingVertical: spacing.sm },
   signOutText: { fontSize: type.small, color: colors.textMuted },
 });

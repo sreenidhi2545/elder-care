@@ -13,6 +13,10 @@ import { query } from '../shared/db/pool.js';
 // as the definition of what this button means.
 const SOS_SEVERITY = 'critical';
 
+// How far back "recent alerts" looks on the family dashboard. Fixed, not
+// caller-configurable — see BUILD_LOG.md for why.
+const HISTORY_WINDOW_DAYS = 7;
+
 /** Shapes a raw `alerts` row into the camelCase form the API returns. */
 export function toPublicAlert(row) {
   return {
@@ -166,5 +170,45 @@ export async function listActiveFamilyAlerts(familyUserId) {
     ...toPublicAlert(row),
     elderlyUser: { fullName: row.elderly_full_name, phone: row.elderly_phone },
     canAcknowledge: row.can_acknowledge_alerts,
+  }));
+}
+
+/**
+ * Resolved/cancelled alerts from the last `windowDays` for every elderly user
+ * linked to this family member with an 'active' family_links row — same
+ * gating as listActiveFamilyAlerts, including the view-only-still-sees
+ * decision. This is the trail an active alert leaves once it's closed, so a
+ * cancelled SOS doesn't just vanish with no record for the family.
+ *
+ * resolved_by identifies who closed it, but not what relationship they have
+ * to the alert — cancel is always the alert owner, resolve can be the owner
+ * or a family member. resolvedByIsSelf (resolved_by === the alert's own
+ * user_id) is what lets the screen say "resolved by them" vs "resolved by
+ * family" rather than just repeating a name with no context.
+ */
+export async function listFamilyAlertHistory(familyUserId, { limit }) {
+  const { rows } = await query(
+    `SELECT a.*,
+            u.full_name AS elderly_full_name,
+            u.phone AS elderly_phone,
+            r.full_name AS resolved_by_name
+       FROM alerts a
+       JOIN family_links fl ON fl.elderly_user_id = a.user_id
+       JOIN users u ON u.id = a.user_id
+       LEFT JOIN users r ON r.id = a.resolved_by
+      WHERE fl.family_user_id = $1
+        AND fl.status = 'active'
+        AND a.status IN ('resolved', 'cancelled')
+        AND a.triggered_at >= now() - make_interval(days => $2)
+      ORDER BY a.triggered_at DESC
+      LIMIT $3`,
+    [familyUserId, HISTORY_WINDOW_DAYS, limit]
+  );
+
+  return rows.map((row) => ({
+    ...toPublicAlert(row),
+    elderlyUser: { fullName: row.elderly_full_name, phone: row.elderly_phone },
+    resolvedByName: row.resolved_by_name,
+    resolvedByIsSelf: row.resolved_by === row.user_id,
   }));
 }

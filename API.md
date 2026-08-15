@@ -129,6 +129,7 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `POST` | `/emergency/alerts/:id/cancel` | Bearer | "That was a mistake" — alert owner only |
 | `POST` | `/emergency/alerts/:id/resolve` | Bearer | "This is handled" — owner or a permitted family member |
 | `GET` | `/emergency/family/alerts` | Bearer + `family` | Active alerts for elderly users the caller is linked to |
+| `GET` | `/emergency/family/alerts/history` | Bearer + `family` | Resolved/cancelled alerts from the last 7 days, same linked users |
 
 ---
 
@@ -536,6 +537,56 @@ Active alerts for every elderly user the caller has an `active` `family_links` r
 
 ---
 
+### `GET /emergency/family/alerts/history`
+
+Resolved and cancelled alerts from the last 7 days for every elderly user the caller has an `active` `family_links` row with. Role-gated to `family`. Same view-only-still-sees gating as `GET /emergency/family/alerts` — `can_acknowledge_alerts` does not affect what's visible here, only whether an alert could have been resolved by this family member while it was active.
+
+The point of this endpoint is that a cancelled or resolved SOS does not just vanish from `GET /emergency/family/alerts` with no trace — a family member should be able to see that their relative pressed SOS and how it ended, even if they weren't watching at the time.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `limit` | no | Positive whole number, capped at 50. Defaults to 20 |
+
+The 7-day window is fixed and not a query parameter.
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "count": 1,
+  "alerts": [
+    {
+      "id": "57e364d0-dba2-48b3-9ae3-fd2eae3a239a",
+      "userId": "68e6ca9c-a980-4509-b01d-cdc4c633bf95",
+      "alertType": "sos",
+      "status": "cancelled",
+      "severity": "critical",
+      "triggeredAt": "2026-08-15T12:41:10.205Z",
+      "resolvedAt": "2026-08-15T12:42:02.398Z",
+      "resolvedBy": "68e6ca9c-a980-4509-b01d-cdc4c633bf95",
+      "...": "remaining fields as in POST /emergency/alerts",
+      "elderlyUser": { "fullName": "Test Elderly", "phone": "+919000000001" },
+      "resolvedByName": "Test Elderly",
+      "resolvedByIsSelf": true
+    }
+  ]
+}
+```
+
+`status` is always `resolved` or `cancelled` here — never `active`. `resolvedByName` is whoever closed it; `resolvedByIsSelf` tells you whether that was the alert's own owner. Cancel is always self (only the owner can cancel), but resolve can be either the owner or a permitted family member — that's the distinction the app uses to show "cancelled by them" versus "resolved by family" versus "resolved by them".
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | `limit` is not a positive whole number |
+| `403` | `insufficient_role` | The caller's role is not `family` |
+
+---
+
 ---
 
 ## For the login and registration screens
@@ -587,4 +638,4 @@ Everything below is planned but does not exist. Do not code against it — it wi
 | Device token registration for push notifications | 1 | Sree |
 | Family links — invitations, approval, permissions | 1 | Sree |
 
-**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `GET /emergency/family/alerts` — see the "Emergency alerts" section above. `family_links` rows themselves must still be created directly (no invite/approve endpoint yet), so the family screen has nothing to show until one exists.
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history` — see the "Emergency alerts" section above. `family_links` rows themselves must still be created directly (no invite/approve endpoint yet), so the family screen has nothing to show until one exists.

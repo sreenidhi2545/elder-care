@@ -48,3 +48,15 @@ export function resolveAlert(id, note) {
 export function listFamilyAlerts() {
   return apiRequest('/emergency/family/alerts');
 }
+
+/**
+ * GET /emergency/family/alerts/history — resolved/cancelled alerts from the
+ * last 7 days for elderly users the caller is linked to. The window is fixed
+ * server-side; only `limit` is a caller option.
+ */
+export function listFamilyAlertHistory({ limit } = {}) {
+  const params = new URLSearchParams();
+  if (limit) params.set('limit', String(limit));
+  const query = params.toString();
+  return apiRequest(`/emergency/family/alerts/history${query ? `?${query}` : ''}`);
+}
