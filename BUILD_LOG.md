@@ -536,3 +536,22 @@ Frontend: `npx expo export --platform android` bundled cleanly, 851 modules (up 
 - **Alerts must not auto-expire.** An unacknowledged alert stays `active` indefinitely; only a human action (`cancel` or `resolve`, both already built) closes it. Escalation adds more attempts to reach someone, not a timeout that silently closes the alert if no one responds — the two are easy to conflate and must not be.
 
 Not designed further here — flagged so it isn't lost, decided when step 3 actually starts.
+
+---
+
+## 2026-08-15 — `WORK_DIVISION.md`: step-level breakdown for every phase
+
+**Why:** the document had a numbered step list for Phase 0 only (section 6's progress table). Phases 1 through 6 existed only as feature bullets — a list of what each phase covers, not the discrete steps within it. Someone reading the document to understand the whole project end to end had no way to see, for instance, that Phase 1 is three separate steps rather than one undifferentiated "emergency core" block. A new section 8, "Step-by-step breakdown — every phase," adds that for all seven phases (0 through 6), one table per phase, each row a step and its owner.
+
+**Plan, not progress.** The new section deliberately carries no status column and no done/next/not-started language — that already exists, correctly, in section 6's "Progress so far," which this section does not touch or duplicate. Section 8 answers "what does this project involve," section 6 answers "how far along is it." Mixing them would have made the plan read differently depending on when it was last updated, which is exactly what a plan document should not do.
+
+**Phase 1's three steps match the terminology already used in this file** — step 1 (SOS button and alert record, including the family dashboard and its history, built and logged above), step 2 (GPS capture, also above), step 3 (notification fanout and escalation, logged as an open item above but not yet built). Reusing the same step numbers here rather than inventing a second numbering scheme is what makes "Phase 1 step 3" mean the same thing in both documents.
+
+**Two milestones placed where they fall, not collected in a separate list** — matching how you asked for them:
+
+- **DLT registration**, noted directly under Phase 1's table, where step 3 (SMS/call/push fanout) lives. Stated as a production-only dependency — development and testing of step 3 do not wait on it, only real SMS delivery to real Indian numbers does — so a reader doesn't mistake it for something blocking the step from being built at all.
+- **The development build**, noted at the top of Phase 3, before its own step 1. Phase 3's background location tracking is exactly the native-module requirement Expo Go can't satisfy — already flagged in this log's open issues more than once (2026-08-12 SDK-downgrade entry, Phase 1 step 2 entry above) — so this is the first place in the plan where that constraint actually blocks a step, and it's now written down as the phase's own first step rather than left as a general open issue with no fixed place to land.
+
+**One addition beyond what either PROJECT_REPORT.md or the existing WORK_DIVISION.md sections state explicitly:** Phase 6 now lists the location-retention purge as its own step, owned by Sree. `SCHEMA_DESIGN.md` and this file's own open issues have said "deferred to Phase 6" since Phase 0, but Phase 6 itself never had a line naming it as one of its steps until now — this closes that gap rather than leaving the commitment only implied.
+
+**Left unchanged:** sections 1 through 7, including the existing per-owner "Features from client requirements" tables in sections 2-4. Those answer "who owns what feature"; section 8 answers "what are the steps, in order" — different questions, both worth keeping.
