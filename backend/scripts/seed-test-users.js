@@ -46,6 +46,20 @@ const TEST_USERS = [
 // so the seeded family account can exercise every gated action immediately.
 const TEST_FAMILY_LINK = { elderlyPhone: '9000000001', familyPhone: '9000000002' };
 
+// Same situation as family_links — no endpoint creates emergency_contacts yet
+// (Phase 1 step 3 built the notification pipeline that reads this table, not
+// a way to manage it from the app). Two contacts, deliberately different:
+// #1 is also the seeded family account, so fanout has a real contact_user_id
+// to find a device token for once one is registered — the only way to
+// exercise the push channel without a third real phone. #2 has no
+// contact_user_id at all, so escalating past #1 is actually testable, and
+// gives the email/SMS "not configured" failure path something to record
+// against a destination that isn't also a real app account.
+const TEST_EMERGENCY_CONTACTS = [
+  { elderlyPhone: '9000000001', fullName: 'Test Family', contactPhone: '9000000002', contactUserPhone: '9000000002', email: null, priority: 1 },
+  { elderlyPhone: '9000000001', fullName: 'Test Neighbour', contactPhone: '9000000099', contactUserPhone: null, email: 'neighbour@example.test', priority: 2 },
+];
+
 const password = process.argv[2];
 
 if (!password) {
@@ -129,6 +143,40 @@ if (elderlyId && familyId) {
 } else {
   console.error('  family_link     SKIPPED — one or both test users were not seeded');
   process.exitCode = 1;
+}
+
+for (const contact of TEST_EMERGENCY_CONTACTS) {
+  const elderlyContactId = idByPhone[contact.elderlyPhone];
+  const contactPhone = normalizePhone(contact.contactPhone);
+  const contactUserId = contact.contactUserPhone ? idByPhone[contact.contactUserPhone] : null;
+
+  if (!elderlyContactId || !contactPhone.ok) {
+    console.error(`  emergency_contact SKIPPED — ${contact.fullName}`);
+    process.exitCode = 1;
+    continue;
+  }
+
+  // Upsert on (user_id, phone), the same UNIQUE constraint the table already has.
+  const { rows } = await query(
+    `INSERT INTO emergency_contacts
+       (user_id, contact_user_id, full_name, phone, email, priority,
+        notify_by_sms, notify_by_call, notify_by_push, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, TRUE, TRUE)
+     ON CONFLICT (user_id, phone) DO UPDATE
+        SET contact_user_id = EXCLUDED.contact_user_id,
+            full_name       = EXCLUDED.full_name,
+            email           = EXCLUDED.email,
+            priority        = EXCLUDED.priority,
+            notify_by_sms   = EXCLUDED.notify_by_sms,
+            notify_by_call  = EXCLUDED.notify_by_call,
+            notify_by_push  = EXCLUDED.notify_by_push,
+            is_active       = TRUE
+     RETURNING id, (xmax = 0) AS inserted`,
+    [elderlyContactId, contactUserId, contact.fullName, contactPhone.value, contact.email, contact.priority]
+  );
+
+  const row = rows[0];
+  console.log(`  emergency_contact  priority ${contact.priority}  ${contact.fullName.padEnd(14)} ${row.inserted ? 'created' : 'updated'}`);
 }
 
 console.log('\nSign in with any of the numbers above and the password you passed.');

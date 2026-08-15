@@ -11,6 +11,7 @@
 import { app } from './app.js';
 import { config } from './shared/config/env.js';
 import { checkConnection, closePool } from './shared/db/pool.js';
+import { startEscalationScheduler, stopEscalationScheduler } from './emergency/notifications/scheduler.js';
 
 const server = await start();
 
@@ -29,6 +30,8 @@ async function start() {
     console.log(`Health check: http://localhost:${config.port}/health`);
   });
 
+  startEscalationScheduler();
+
   return listener;
 }
 
@@ -37,6 +40,7 @@ async function start() {
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     console.log(`\n${signal} received, shutting down.`);
+    stopEscalationScheduler();
     server.close(async () => {
       await closePool();
       process.exit(0);

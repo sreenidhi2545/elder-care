@@ -51,6 +51,19 @@ export function resolveAlert(id, note) {
   return apiRequest(`/emergency/alerts/${id}/resolve`, { method: 'POST', body: note ? { note } : undefined });
 }
 
+/**
+ * POST /emergency/alerts/:id/acknowledge — "I've seen this", a permitted
+ * family member only. Does not close the alert, only stops it escalating to
+ * the next emergency contact.
+ *
+ * If someone else already acknowledged it, the server answers 409
+ * `alert_already_acknowledged` with the current alert attached — reassurance
+ * ("someone's already on it"), not an error. See FamilyHomeScreen.
+ */
+export function acknowledgeAlert(id) {
+  return apiRequest(`/emergency/alerts/${id}/acknowledge`, { method: 'POST' });
+}
+
 /** GET /emergency/family/alerts — active alerts for elderly users the caller is linked to. */
 export function listFamilyAlerts() {
   return apiRequest('/emergency/family/alerts');

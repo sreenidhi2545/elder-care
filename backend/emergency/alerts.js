@@ -134,6 +134,34 @@ export function resolveAlert(id, actorUserId, note) {
 }
 
 /**
+ * "I've seen this and I'm responding" — a permitted family member only (see
+ * routes.js; the alert's own owner can never have a family_links row to
+ * themselves, so this naturally excludes them without a special case).
+ *
+ * Does not close the alert — status stays 'active'. Acknowledging and
+ * closing are different facts: acknowledging stops escalation (see
+ * notifications/records.js's findAlertsDueForEscalation, which filters on
+ * acknowledged_at IS NULL); only cancel or resolve actually end the alert. A
+ * family member acknowledging is not the same claim as them resolving it.
+ *
+ * Only ever touches a row that is still active and not yet acknowledged, for
+ * the same reason cancel/resolve only touch 'active' rows — one atomic
+ * statement so two family members acknowledging at once can only ever have
+ * one winner.
+ */
+export async function acknowledgeAlert(id, actorUserId) {
+  const { rows } = await query(
+    `UPDATE alerts
+        SET acknowledged_at = now(),
+            acknowledged_by = $2
+      WHERE id = $1 AND status = 'active' AND acknowledged_at IS NULL
+      RETURNING *`,
+    [id, actorUserId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
  * The family_links row between a family member and an elderly user, or null
  * if none exists. routes.js uses this to decide both whether an alert may be
  * shown at all (link must be 'active') and whether it may be resolved
@@ -176,11 +204,13 @@ export async function listActiveFamilyAlerts(familyUserId) {
     `SELECT a.*,
             u.full_name AS elderly_full_name,
             u.phone AS elderly_phone,
+            ack.full_name AS acknowledged_by_name,
             fl.can_acknowledge_alerts,
             fl.can_view_location
        FROM alerts a
        JOIN family_links fl ON fl.elderly_user_id = a.user_id
        JOIN users u ON u.id = a.user_id
+       LEFT JOIN users ack ON ack.id = a.acknowledged_by
       WHERE fl.family_user_id = $1
         AND fl.status = 'active'
         AND a.status = 'active'
@@ -193,6 +223,7 @@ export async function listActiveFamilyAlerts(familyUserId) {
       {
         ...toPublicAlert(row),
         elderlyUser: { fullName: row.elderly_full_name, phone: row.elderly_phone },
+        acknowledgedByName: row.acknowledged_by_name,
         canAcknowledge: row.can_acknowledge_alerts,
       },
       row.can_view_location

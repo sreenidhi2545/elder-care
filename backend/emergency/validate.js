@@ -119,6 +119,45 @@ export function validateHistoryQuery(query = {}) {
   };
 }
 
+const DEVICE_PLATFORMS = ['ios', 'android', 'web'];
+
+/** POST /emergency/device-tokens */
+export function validateRegisterDeviceTokenBody(body = {}) {
+  const { expoPushToken, platform, deviceName, deviceModel, appVersion, osVersion } = body;
+
+  const shortString = (value, max) => typeof value === 'string' && value.length <= max;
+
+  const errors = fieldErrors([
+    { when: typeof expoPushToken !== 'string' || expoPushToken.trim() === '',
+      field: 'expoPushToken', message: 'expoPushToken is required.' },
+    { when: typeof expoPushToken === 'string' && expoPushToken.length > 255,
+      field: 'expoPushToken', message: 'expoPushToken must be 255 characters or fewer.' },
+    { when: !DEVICE_PLATFORMS.includes(platform),
+      field: 'platform', message: `platform must be one of: ${DEVICE_PLATFORMS.join(', ')}.` },
+    { when: deviceName !== undefined && !shortString(deviceName, 120),
+      field: 'deviceName', message: 'deviceName must be a string of 120 characters or fewer.' },
+    { when: deviceModel !== undefined && !shortString(deviceModel, 120),
+      field: 'deviceModel', message: 'deviceModel must be a string of 120 characters or fewer.' },
+    { when: appVersion !== undefined && !shortString(appVersion, 20),
+      field: 'appVersion', message: 'appVersion must be a string of 20 characters or fewer.' },
+    { when: osVersion !== undefined && !shortString(osVersion, 40),
+      field: 'osVersion', message: 'osVersion must be a string of 40 characters or fewer.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return {
+    expoPushToken: expoPushToken.trim(),
+    platform,
+    deviceName: deviceName ?? null,
+    deviceModel: deviceModel ?? null,
+    appVersion: appVersion ?? null,
+    osVersion: osVersion ?? null,
+  };
+}
+
 /** POST /emergency/alerts/:id/cancel and /resolve share this body shape. */
 export function validateCloseAlertBody(body = {}) {
   const { note } = body;

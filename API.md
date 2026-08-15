@@ -1,11 +1,11 @@
 # ElderCare — API Contract
 
-**Version:** 0.3 — Phase 0 (authentication) + Phase 1 steps 1-2 (SOS button, alert record, GPS capture)
+**Version:** 0.4 — Phase 0 (authentication) + Phase 1 steps 1-3 (SOS button, alert record, GPS capture, notification fanout and escalation)
 **Base URL (development):** `http://localhost:5000`
 
 This document is the agreement between the backend and the mobile app. Every endpoint the app is allowed to call is listed here. If you add an endpoint, add it to this file in the same Pull Request. If you need an endpoint that does not exist yet, raise it in the group rather than working around it.
 
-The authentication endpoints, the emergency alert endpoints, and GPS capture exist today. Emergency contact notification, geofencing, and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
+The authentication endpoints, the emergency alert endpoints, GPS capture, and notification fanout exist today. Geofencing and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
 
 ---
 
@@ -128,9 +128,11 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `GET` | `/emergency/alerts` | Bearer | The caller's own alerts |
 | `POST` | `/emergency/alerts/:id/cancel` | Bearer | "That was a mistake" — alert owner only |
 | `POST` | `/emergency/alerts/:id/resolve` | Bearer | "This is handled" — owner or a permitted family member |
+| `POST` | `/emergency/alerts/:id/acknowledge` | Bearer | "I've seen this" — a permitted family member only; stops escalation, does not close the alert |
 | `GET` | `/emergency/family/alerts` | Bearer + `family` | Active alerts for elderly users the caller is linked to |
 | `GET` | `/emergency/family/alerts/history` | Bearer + `family` | Resolved/cancelled alerts from the last 7 days, same linked users |
 | `POST` | `/emergency/locations` | Bearer | Record one GPS reading |
+| `POST` | `/emergency/device-tokens` | Bearer | Register this device for push notifications |
 
 ---
 
@@ -393,7 +395,9 @@ The 50 most recently created users. Admin only.
 
 ## Emergency alerts
 
-Phase 1, steps 1-2: the SOS button, the alert record, and GPS capture. Notification fanout is a separate step (3) and will extend this section when built. Every one of these endpoints requires `Authorization: Bearer <accessToken>`; the five error codes listed under [`GET /auth/me`](#get-authme) apply here too and are not repeated below.
+Phase 1, steps 1-3: the SOS button, the alert record, GPS capture, and notification fanout with escalation. Every one of these endpoints requires `Authorization: Bearer <accessToken>`; the five error codes listed under [`GET /auth/me`](#get-authme) apply here too and are not repeated below.
+
+**What happens when an SOS fires, beyond creating the row:** the caller's `emergency_contacts` are notified in `priority` order, one contact at a time — contact 1 first, not everyone at once, so nobody assumes someone else is already handling it. If nobody acknowledges within `ESCALATION_INTERVAL_MINUTES` (default 5), the next contact is notified, then the next, until either someone acknowledges or every contact has been tried. **Alerts never auto-expire** — reaching the end of the contact list does not close the alert or stop the family dashboard from showing it; only a human `cancel` or `resolve` does that. See "Notification channels and escalation" below for how fanout actually works, and `POST /emergency/alerts/:id/acknowledge` for what stops it.
 
 ### `POST /emergency/alerts`
 
@@ -442,6 +446,8 @@ Captured on the device at press time and written straight onto the alert — **n
 | `409` | `sos_already_active` | The caller already has an active SOS alert. The response carries `alert`, the existing one, in the same shape as above |
 
 **`sos_already_active` is not a failure to show the person pressing the button.** A second press while one alert is already open almost always means the same emergency pressed twice, not a second one — the app should read this as reassurance ("help is already on the way"), never as an error screen. See `ElderlyHomeScreen.js`.
+
+**Notifying contact 1 happens in the background, after the response is sent.** The app never waits on it — same "never a precondition" principle as GPS capture above, just applied to a slower, less reliable dependency (SMS/email/push providers) instead of the device's own GPS. If fanout fails for any reason, it is retried automatically on the next escalation sweep — see below.
 
 ---
 
@@ -512,11 +518,38 @@ The caller's own alerts, newest first.
 
 ---
 
+### `POST /emergency/alerts/:id/acknowledge`
+
+"I've seen this and I'm responding" — a family member with an `active` `family_links` row to the alert's owner **and** `can_acknowledge_alerts: true`. The alert's own owner cannot acknowledge their own alert — there is no owner branch for this endpoint; a `family_links` row from someone to themselves can never exist (the schema forbids it), so the owner is excluded automatically rather than as a special case.
+
+**Does not close the alert.** `status` stays `active`; only `acknowledged_at`/`acknowledged_by` are set. The only effect is that escalation to the next emergency contact stops — the alert still shows as active everywhere it did before, and still needs a `cancel` or `resolve` to actually end it.
+
+No request body.
+
+**Response `200`** — the updated alert, `acknowledgedAt`/`acknowledgedBy` populated, `status` unchanged.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `403` | `not_permitted` | The caller isn't a permitted family member for this alert's owner (this includes the owner themselves) |
+| `404` | `alert_not_found` | No alert with that id |
+| `409` | `alert_not_active` | The alert is already cancelled or resolved |
+| `409` | `alert_already_acknowledged` | Someone else already acknowledged it. The response carries `alert`, the current state |
+
+**`alert_already_acknowledged` is not a failure to show the person who tapped it**, same reasoning as `sos_already_active` — a second family member acknowledging means someone else is already on it, which is reassurance, not an error.
+
+**Reachable from the push notification itself, not only from inside the app.** The push sent for a new SOS carries an `sos-alert` notification category with an "Acknowledge" action button; tapping it calls this endpoint directly. See `frontend/src/emergency/notifications/alertNotifications.js`.
+
+---
+
 ### `GET /emergency/family/alerts`
 
 Active alerts for every elderly user the caller has an `active` `family_links` row with. Role-gated to `family`.
 
 **Every alert for every actively-linked elderly user is included**, regardless of `can_acknowledge_alerts` — a view-only family member still needs to know an emergency is happening, they just cannot close it out. Each alert carries `canAcknowledge` so the app knows whether to offer a "mark resolved" button; the `resolve` endpoint enforces the same permission server-side regardless of what the app shows.
+
+**`acknowledgedByName` is the acknowledging family member's name, joined in for display** — `null` until someone acknowledges. `acknowledgedAt`/`acknowledgedBy` (raw id) are already part of every alert shape; this adds the name so the screen doesn't have to look it up separately.
 
 **`latitude`/`longitude` are redacted to `null` when the caller's `family_links.can_view_location` is `false`**, regardless of what's actually stored on the alert — enforced in the query, not left to the app to hide. Each alert also carries `canViewLocation` so the app can tell "no fix yet" apart from "you don't have permission to see it," though today it doesn't need to: it just renders whatever coordinates it's given.
 
@@ -536,6 +569,9 @@ Active alerts for every elderly user the caller has an `active` `family_links` r
       "latitude": "12.971599",
       "longitude": "77.594566",
       "triggeredAt": "2026-08-15T06:51:50.230Z",
+      "acknowledgedAt": null,
+      "acknowledgedBy": null,
+      "acknowledgedByName": null,
       "...": "remaining fields as in POST /emergency/alerts",
       "elderlyUser": { "fullName": "Test Elderly", "phone": "+919000000001" },
       "canAcknowledge": true,
@@ -652,6 +688,79 @@ Records one GPS reading for the caller. Phase 1, step 2: capture and storage onl
 
 ---
 
+### `POST /emergency/device-tokens`
+
+Registers this device's Expo push token so the caller can be reached by push — including as the `contact_user_id` on someone else's `emergency_contacts` row. Not role-gated: anyone signed in can register a device, since anyone could end up listed as a contact.
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `expoPushToken` | string | **yes** | 255 characters or fewer |
+| `platform` | string | **yes** | `ios`, `android` or `web` |
+| `deviceName` | string | no | 120 characters or fewer |
+| `deviceModel` | string | no | 120 characters or fewer |
+| `appVersion` | string | no | 20 characters or fewer |
+| `osVersion` | string | no | 40 characters or fewer |
+
+**Upserts on the token itself**, not on `(user, device)` — the same physical token can only ever belong to one user, so re-registering (a reinstall, or a different account signing in on the same device) correctly reassigns it rather than creating a duplicate row.
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "deviceToken": {
+    "id": "308bfc91-a6e8-4005-83f7-111fe61d4c0a",
+    "userId": "43d2e8c5-82cd-4307-a673-3a84d411bd7e",
+    "platform": "android",
+    "deviceName": "Test Pixel",
+    "isActive": true,
+    "lastSeenAt": "2026-08-15T14:55:01.003Z",
+    "createdAt": "2026-08-15T14:55:01.003Z"
+  }
+}
+```
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | `expoPushToken` missing, `platform` not one of the three values, or another field fails its own length rule |
+
+---
+
+## Notification channels and escalation
+
+How `POST /emergency/alerts` actually reaches someone, for anyone extending this later.
+
+**Channels — one module per provider, each with `isConfigured()` and `send()`:** `backend/emergency/notifications/providers/{push,email,sms,voice}.js`.
+
+| Channel | Provider | Configured via | Status |
+|---|---|---|---|
+| Push | Expo | nothing — works immediately | Live |
+| Email | Resend | `RESEND_API_KEY` in `.env` | Live once set |
+| SMS | Twilio | `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` | Wired, inactive until set |
+| Voice call | Twilio | same three variables | Wired, inactive until set |
+
+**An unconfigured channel still records an attempt.** `isConfigured()` isn't a gate that skips the channel — a contact who opted into SMS still gets a `notifications` row with `status: 'failed'` and an `error_message` naming exactly which `.env` variable is missing. That row is both the audit trail and the "how do I turn this on" documentation, together.
+
+**India: DLT.** SMS to a real Indian mobile number will not be delivered in production until DLT (Distributed Ledger Technology) registration is complete with the telecom regulator — an entity registration, a sender header, and a message template, each needing approval. The client is arranging this; it takes on the order of weeks. It does not block anything here — Twilio credentials alone are enough to develop and test against a verified number — only real delivery to real Indian numbers once live. See `.env.example`.
+
+**Which channels are tried, per contact:**
+
+- **Push** — only if the contact's `contact_user_id` resolves to at least one active `device_tokens` row. No token means no attempt at all, not a failure — there's nothing to record a destination for.
+- **Email** — attempted whenever the contact has an `email` address. The schema has no `notify_by_email` column, so unlike the other three channels there's no way for a contact to opt out of email specifically while keeping the others on.
+- **SMS / voice call** — gated by `notify_by_sms` / `notify_by_call`. Always attempted when enabled, whether or not Twilio is configured — see "unconfigured channel" above.
+
+A contact reachable on more than one channel is notified on all of them at once, in parallel — the goal for one contact is reaching that one person by whatever means work, not spacing channels out.
+
+**Escalation — one contact at a time, not everyone at once.** `POST /emergency/alerts` notifies contact 1 (lowest `priority`) immediately, in the background, without delaying the response. A scheduler (`backend/emergency/notifications/scheduler.js`, a plain interval, checked every 60 seconds) escalates to the next contact once `ESCALATION_INTERVAL_MINUTES` (default 5) has passed since the last one was notified with no acknowledgement. This continues until someone acknowledges (`POST /emergency/alerts/:id/acknowledge`) or every contact has been tried — reaching the end of the list does not close the alert or stop trying to reach people some other way (a phone call, checking in person); it just means the automated fanout has done everything it can.
+
+**No new column tracks escalation progress.** "Who was notified, and when" is derived from the `notifications` table joined to `emergency_contacts.priority`, not stored on `alerts`. Since escalation only ever moves forward, the most recently created `notifications` row for an alert always belongs to its current-stage contact.
+
+---
+
 ---
 
 ## For the login and registration screens
@@ -695,12 +804,13 @@ Everything below is planned but does not exist. Do not code against it — it wi
 
 | Area | Phase | Owner |
 |---|---|---|
-| Emergency contact notification fanout (SMS/call/push), escalation on no acknowledgement | 1 | Sree |
 | Caregiver profiles, search, booking, scheduling, attendance | 2 | [Teammate B] |
 | Geofences, breach detection, live location over WebSockets | 3 | Sree |
 | Care plans, activity reports, tasks, reviews | 4 | [Teammate B] |
 | Ambulance booking, disaster alerts, response centre, fall trigger | 5 | [Teammate C] |
-| Device token registration for push notifications | 1 | Sree |
 | Family links — invitations, approval, permissions | 1 | Sree |
+| Emergency contacts management (add/edit/remove/reorder) | 1 | Sree |
 
-**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations` — see the "Emergency alerts" section above. `family_links` rows themselves must still be created directly (no invite/approve endpoint yet), so the family screen has nothing to show until one exists.
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above.
+
+`family_links` and `emergency_contacts` rows both must still be created directly (no management endpoints for either yet) — same situation, same reason: nothing in this step needed one, so nothing was built ahead of being asked for. See `backend/scripts/seed-test-users.js` for how development data gets in either table today.

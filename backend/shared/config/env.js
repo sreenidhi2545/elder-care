@@ -66,4 +66,24 @@ export const config = Object.freeze({
   // of what these say. See shared/phone.js.
   defaultCallingCode: (process.env.DEFAULT_CALLING_CODE || '91').replace(/^\+/, ''),
   defaultNationalDigits: Number(process.env.DEFAULT_NATIONAL_DIGITS) || 10,
+
+  // Notification channels — Phase 1 step 3. None of these are in `required`
+  // above: every channel is optional at startup, and each provider checks its
+  // own isConfigured() before sending. An unconfigured channel is not a
+  // startup error, it is a per-attempt `notifications` row with status
+  // 'failed' and an error_message naming exactly what's missing. See
+  // backend/emergency/notifications/providers/.
+  resendApiKey: process.env.RESEND_API_KEY || null,
+  // Resend's own sandbox sender, valid with no domain verification — fine for
+  // development, replace once a real sending domain is verified.
+  emailFromAddress: process.env.EMAIL_FROM_ADDRESS || 'onboarding@resend.dev',
+
+  twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || null,
+  twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || null,
+  twilioFromNumber: process.env.TWILIO_FROM_NUMBER || null,
+
+  // How long an active, unacknowledged alert waits before the next contact is
+  // notified. "A few minutes" per the product requirement — configurable
+  // rather than hard-coded so it can be tuned without a code change.
+  escalationIntervalMinutes: Number(process.env.ESCALATION_INTERVAL_MINUTES) || 5,
 });

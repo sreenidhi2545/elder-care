@@ -23,14 +23,21 @@
 // there. Still no in-app map, no live tracking — those are Phase 3. No
 // caregiver or care-plan sections — those are Phase 2/4, owned by the
 // caregiver module.
+//
+// Phase 1 step 3 adds "Acknowledge", alongside "Mark resolved" on the same
+// canAcknowledge gate. Acknowledging does not close the alert — it stops the
+// backend escalating to the next emergency contact, nothing more — so the
+// card stays in this list and just shows who acknowledged it. The same
+// acknowledge endpoint is also reachable straight from the push notification
+// itself; see emergency/notifications/alertNotifications.js.
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { listFamilyAlerts, listFamilyAlertHistory, resolveAlert } from '../api/alerts';
-import { NetworkError } from '../../shared/api/client';
+import { listFamilyAlerts, listFamilyAlertHistory, resolveAlert, acknowledgeAlert } from '../api/alerts';
+import { ApiError, NetworkError } from '../../shared/api/client';
 import { useAuth } from '../../shared/auth/AuthContext';
 import { colors, spacing, type } from '../../shared/ui/theme';
 
@@ -47,6 +54,7 @@ export function FamilyHomeScreen() {
   const [banner, setBanner] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
   const [resolvingId, setResolvingId] = useState(null);
+  const [acknowledgingId, setAcknowledgingId] = useState(null);
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -108,6 +116,30 @@ export function FamilyHomeScreen() {
     }
   }
 
+  async function handleAcknowledge(alertId) {
+    setAcknowledgingId(alertId);
+    try {
+      await acknowledgeAlert(alertId);
+      await load({ silent: true }); // picks up acknowledgedAt/acknowledgedByName from the server
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'alert_already_acknowledged') {
+        // Someone else got there first — reassurance, not a failure on this
+        // person's part. Same pattern as sos_already_active on the elderly
+        // screen: never show this as an error.
+        setBanner('Already acknowledged by someone else.');
+        await load({ silent: true });
+        return;
+      }
+      setBanner(
+        err instanceof NetworkError
+          ? 'Could not reach the server. Please try again.'
+          : 'Could not acknowledge that alert. Please try again.'
+      );
+    } finally {
+      setAcknowledgingId(null);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <ScrollView
@@ -140,9 +172,11 @@ export function FamilyHomeScreen() {
               alert={alert}
               confirming={confirmingId === alert.id}
               resolving={resolvingId === alert.id}
+              acknowledging={acknowledgingId === alert.id}
               onRequestResolve={() => setConfirmingId(alert.id)}
               onBackOut={() => setConfirmingId(null)}
               onConfirmResolve={() => handleResolve(alert.id)}
+              onAcknowledge={() => handleAcknowledge(alert.id)}
             />
           ))}
 
@@ -164,10 +198,20 @@ export function FamilyHomeScreen() {
   );
 }
 
-function AlertCard({ alert, confirming, resolving, onRequestResolve, onBackOut, onConfirmResolve }) {
+function AlertCard({
+  alert,
+  confirming,
+  resolving,
+  acknowledging,
+  onRequestResolve,
+  onBackOut,
+  onConfirmResolve,
+  onAcknowledge,
+}) {
   const minutesAgo = Math.max(0, Math.round((Date.now() - new Date(alert.triggeredAt)) / 60000));
   const elapsed = minutesAgo === 0 ? 'Just now' : `${minutesAgo} minute${minutesAgo === 1 ? '' : 's'} ago`;
   const hasLocation = alert.latitude != null && alert.longitude != null;
+  const busy = resolving || acknowledging;
 
   return (
     <View style={styles.card}>
@@ -182,19 +226,32 @@ function AlertCard({ alert, confirming, resolving, onRequestResolve, onBackOut, 
         </Pressable>
       )}
 
-      {resolving && <ActivityIndicator color={colors.text} style={styles.spinner} />}
-
-      {!resolving && !confirming && alert.canAcknowledge && (
-        <Pressable onPress={onRequestResolve} accessibilityRole="button" style={styles.resolveButton}>
-          <Text style={styles.resolveButtonText}>Mark resolved</Text>
-        </Pressable>
+      {alert.acknowledgedAt && (
+        <Text style={styles.acknowledgedText}>
+          Acknowledged by {alert.acknowledgedByName ?? 'a family member'} — escalation stopped
+        </Text>
       )}
 
-      {!resolving && !confirming && !alert.canAcknowledge && (
+      {busy && <ActivityIndicator color={colors.text} style={styles.spinner} />}
+
+      {!busy && !confirming && alert.canAcknowledge && (
+        <View style={styles.actionRow}>
+          {!alert.acknowledgedAt && (
+            <Pressable onPress={onAcknowledge} accessibilityRole="button" style={styles.acknowledgeButton}>
+              <Text style={styles.acknowledgeButtonText}>Acknowledge</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={onRequestResolve} accessibilityRole="button" style={styles.resolveButton}>
+            <Text style={styles.resolveButtonText}>Mark resolved</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {!busy && !confirming && !alert.canAcknowledge && (
         <Text style={styles.viewOnlyText}>You have view-only access to this alert.</Text>
       )}
 
-      {!resolving && confirming && (
+      {!busy && confirming && (
         <View style={styles.confirmButtons}>
           <Pressable onPress={onBackOut} accessibilityRole="button" style={styles.confirmNoButton}>
             <Text style={styles.confirmNoButtonText}>Not yet</Text>
@@ -288,6 +345,15 @@ const styles = StyleSheet.create({
   cardName: { fontSize: type.heading, fontWeight: '700', color: colors.text },
   cardType: { fontSize: type.small, fontWeight: '700', color: colors.danger, letterSpacing: 0.5 },
   locationLink: { fontSize: type.small, color: colors.primary, fontWeight: '600' },
+  acknowledgedText: { fontSize: type.small, color: colors.text, fontWeight: '600' },
+  actionRow: { gap: spacing.sm },
+  acknowledgeButton: {
+    backgroundColor: colors.text,
+    borderRadius: 10,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+  },
+  acknowledgeButtonText: { fontSize: type.body, fontWeight: '700', color: colors.surface },
   resolveButton: {
     backgroundColor: colors.surface,
     borderRadius: 10,

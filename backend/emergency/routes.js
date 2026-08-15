@@ -5,12 +5,14 @@
 //   GET  /emergency/alerts               the caller's own alerts
 //   POST /emergency/alerts/:id/cancel    "that was a mistake" — owner only
 //   POST /emergency/alerts/:id/resolve   "this is handled" — owner or family
+//   POST /emergency/alerts/:id/acknowledge  "I've seen this" — family only, stops escalation
 //   GET  /emergency/family/alerts        active alerts for linked elderly users
 //   GET  /emergency/family/alerts/history recent resolved/cancelled alerts, last 7 days
 //   POST /emergency/locations            record one GPS reading
+//   POST /emergency/device-tokens        register this device for push
 //
-// Phase 1, step 2: GPS location capture and storage. Still no geofencing
-// (Phase 3), no map UI, no notification fanout (step 3). See BUILD_LOG.md.
+// Phase 1, step 3: emergency contact notification and escalation. No
+// geofencing, no map UI (Phase 3). See BUILD_LOG.md.
 // ============================================================================
 
 import { Router } from 'express';
@@ -24,17 +26,21 @@ import {
   findAlertById,
   cancelAlert,
   resolveAlert,
+  acknowledgeAlert,
   findFamilyLink,
   listActiveFamilyAlerts,
   listFamilyAlertHistory,
 } from './alerts.js';
 import { createLocation, toPublicLocation } from './locations.js';
+import { registerDeviceToken } from './deviceTokens.js';
+import { advanceFanout } from './notifications/fanout.js';
 import {
   validateListQuery,
   validateCloseAlertBody,
   validateHistoryQuery,
   validateSosAlertBody,
   validateCreateLocationBody,
+  validateRegisterDeviceTokenBody,
 } from './validate.js';
 
 export const emergencyRouter = Router();
@@ -71,6 +77,15 @@ emergencyRouter.post('/alerts', requireAuth, async (req, res) => {
   }
 
   const alert = await createSosAlert(req.user.id, location);
+
+  // Fire-and-forget: notifying contact 1 must never delay the response to the
+  // person who just pressed SOS, same "never a precondition" principle as the
+  // GPS capture above. Errors are logged, not thrown — a notification problem
+  // is not a reason to fail the alert that already exists.
+  advanceFanout(alert.id).catch((err) =>
+    console.error(`Initial fanout failed for alert ${alert.id}:`, err)
+  );
+
   res.status(201).json({ status: 'ok', alert: toPublicAlert(alert) });
 });
 
@@ -143,6 +158,43 @@ emergencyRouter.post('/alerts/:id/resolve', requireAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /emergency/alerts/:id/acknowledge — a permitted family member only.
+// Does not close the alert; stops it from escalating further.
+// ---------------------------------------------------------------------------
+
+emergencyRouter.post('/alerts/:id/acknowledge', requireAuth, async (req, res) => {
+  const id = requireAlertId(req);
+
+  const alert = await findAlertById(id);
+  if (!alert) throw notFound('alert_not_found', 'No alert with that id.');
+
+  // No owner branch here on purpose: chk_not_self in the schema means a
+  // family_links row from someone to themselves can never exist, so the
+  // owner is automatically excluded by this same check, not a special case.
+  const link = await findFamilyLink(req.user.id, alert.user_id);
+  const permitted = link && link.status === 'active' && link.can_acknowledge_alerts;
+  if (!permitted) {
+    throw forbidden('not_permitted', 'You are not permitted to acknowledge alerts for this person.');
+  }
+
+  const updated = await acknowledgeAlert(id, req.user.id);
+  if (!updated) {
+    // Re-read rather than trust the copy fetched above, which may now be
+    // stale — distinguishes "already closed" from "someone else got there
+    // first" for the error the app shows.
+    const current = await findAlertById(id);
+    if (current.status !== 'active') {
+      throw conflict('alert_not_active', 'This alert is no longer active.');
+    }
+    throw conflict('alert_already_acknowledged', 'This alert has already been acknowledged.', {
+      alert: toPublicAlert(current),
+    });
+  }
+
+  res.json({ status: 'ok', alert: toPublicAlert(updated) });
+});
+
+// ---------------------------------------------------------------------------
 // GET /emergency/family/alerts — family role only
 // ---------------------------------------------------------------------------
 
@@ -175,4 +227,15 @@ emergencyRouter.post('/locations', requireAuth, async (req, res) => {
   const location = validateCreateLocationBody(req.body);
   const row = await createLocation(req.user.id, location);
   res.status(201).json({ status: 'ok', location: toPublicLocation(row) });
+});
+
+// ---------------------------------------------------------------------------
+// POST /emergency/device-tokens — no role check, same reasoning as the two
+// endpoints above: scoped to the caller's own account.
+// ---------------------------------------------------------------------------
+
+emergencyRouter.post('/device-tokens', requireAuth, async (req, res) => {
+  const deviceToken = validateRegisterDeviceTokenBody(req.body);
+  const row = await registerDeviceToken(req.user.id, deviceToken);
+  res.status(201).json({ status: 'ok', deviceToken: row });
 });

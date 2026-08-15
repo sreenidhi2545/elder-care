@@ -318,6 +318,7 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 ### Closed
 
 - **Phone numbers not normalised** — closed 2026-08-12. Normalised to E.164 in `backend/shared/phone.js`, applied by both `validateRegister` and `validateLogin`, documented in `API.md`, existing rows migrated. See the entry above.
+- **Whether `can_acknowledge_alerts` should also permit cancelling an alert, not just resolving it** — closed 2026-08-15. Decided against: `cancel` stays owner-only. See the Phase 1 step 3 entry below for the recommendation and why.
 
 ### Open
 
@@ -334,7 +335,6 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 - **`caregivers.average_rating` and `total_reviews`** are not maintained by the database. Whoever builds reviews in Phase 4 must recalculate them in the same transaction that writes the review.
 - **Overlapping caregiver visits** are not prevented by the database, only identical start times. The application has to check.
 - **Identity document numbers** are deliberately not stored. If the client requires them, the answer is a hash plus the document in a separate access-controlled store — not a plain column.
-- **Whether `can_acknowledge_alerts` should also permit cancelling an alert, not just resolving it.** Left open deliberately at your request — see the 2026-08-15 entry below for the case on each side. A one-line change in `backend/emergency/routes.js` either way.
 - **The SOS button flow is unverified on a real device.** Bundling proves it compiles; it does not prove the 5-second countdown, the confirm-to-cancel step, or the polling behaviour hold up under an actual press on an actual phone. See the 2026-08-15 entry below.
 
 ---
@@ -555,3 +555,71 @@ Not designed further here — flagged so it isn't lost, decided when step 3 actu
 **One addition beyond what either PROJECT_REPORT.md or the existing WORK_DIVISION.md sections state explicitly:** Phase 6 now lists the location-retention purge as its own step, owned by Sree. `SCHEMA_DESIGN.md` and this file's own open issues have said "deferred to Phase 6" since Phase 0, but Phase 6 itself never had a line naming it as one of its steps until now — this closes that gap rather than leaving the commitment only implied.
 
 **Left unchanged:** sections 1 through 7, including the existing per-owner "Features from client requirements" tables in sections 2-4. Those answer "who owns what feature"; section 8 answers "what are the steps, in order" — different questions, both worth keeping.
+
+---
+
+## 2026-08-15 — Phase 1, step 3: emergency contact notification and escalation
+
+Scope: notification delivery and escalation. Steps 1 (SOS) and 2 (GPS) were already verified on a device before this started.
+
+### Channels — `backend/emergency/notifications/providers/{push,email,sms,voice}.js`
+
+Each provider is `isConfigured()` + `send()`, called over plain `fetch` — no `expo-server-sdk`, no `twilio` npm package. Each provider's API is one HTTP call with a JSON or form body; that's not enough surface to justify a dependency, same reasoning the project already applied to not having an HTTP client library on the frontend.
+
+- **Push (Expo)** — live with zero configuration. `DeviceNotRegistered` errors deactivate the stale `device_tokens` row so a dead token isn't retried on every future alert.
+- **Email (Resend)** — chosen after asking; free tier, and its sandbox sender (`onboarding@resend.dev`) works with no domain verification, which matters for a project at this stage. Live once `RESEND_API_KEY` is set.
+- **SMS and voice (Twilio)** — already named in `PROJECT_REPORT.md`'s stack, so this one wasn't a decision to make, just to wire. Live once `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` are set. Voice uses inline TwiML on the call-create request rather than a hosted TwiML endpoint — one POST is enough for a fixed spoken message.
+
+**An unconfigured channel still records the attempt, with the fix in the error message.** `isConfigured()` isn't a gate that silently skips the channel — a contact who opted into SMS still gets a `notifications` row with `status: 'failed'` and `error_message` naming exactly which `.env` variable is missing, and for SMS, the DLT note besides. That row is both the audit trail the product requirement asked for and the "how do I turn this on" documentation, in the same place, rather than two things that could drift apart.
+
+**Found while wiring this up: `emergency_contacts` has no `notify_by_email` column.** `notify_by_sms`, `notify_by_call`, `notify_by_push` all exist; email doesn't. Decision: attempt email whenever the contact has an address, unconditionally — there's no schema-level way to ask for anything else right now. Flagged rather than silently worked around, since it means a contact genuinely cannot opt out of email specifically while keeping the other channels on, and that's a real (if minor) gap someone should decide about deliberately later, not an oversight to rediscover.
+
+### Fanout and escalation — `backend/emergency/notifications/fanout.js`
+
+**One function, `advanceFanout`, does both the initial press and every later escalation.** Called fire-and-forget right after `POST /emergency/alerts` creates the row — never awaited, same "never a precondition" principle as GPS capture in step 2, just applied to slower and less reliable dependencies (SMS/email/push providers) than the device's own GPS. Called again by a scheduler once the wait interval passes with no acknowledgement. Both calls are the same code path: with no prior `notifications` row for the alert, "the next unattempted contact" is simply the first one — there was never a need for two different "who's next" implementations that could disagree.
+
+**Deliberately not a schema change.** "How far escalation has gotten" is derived from `notifications` joined to `emergency_contacts.priority`, not a new column on `alerts`. Since escalation only ever moves forward, the most recently created `notifications` row for an alert always belongs to its current-stage contact — no need to aggregate across every row for that contact, or store separate state anywhere. A contact with zero eligible channels (no device token, no email, both `notify_by_sms`/`notify_by_call` false) is skipped over within the same pass rather than getting a row of its own, which is what keeps this derivation correct — otherwise escalation could get stuck forever behind a contact that was never actually reachable.
+
+**Scheduler is a plain `setInterval`, not a cron dependency.** `backend/emergency/notifications/scheduler.js` sweeps every 60 seconds, asking the database which active, unacknowledged alerts are due (`ESCALATION_INTERVAL_MINUTES`, default 5, since when nothing configures the SOS button case), and advances each one. Started and stopped from `server.js`'s own lifecycle, alongside the database pool.
+
+**Known, accepted race, not engineered around.** The fire-and-forget call from `POST /emergency/alerts` and a scheduler sweep could in principle both call `advanceFanout` for the same brand-new alert within the same instant, both see no prior notifications, and both notify contact 1. Worst case is one redundant round of notifications to the same contact, not a missed one. A Postgres advisory lock would close this, but for how rarely the timing could actually collide, it wasn't judged worth the added complexity right now — written down here so it's a decision, not a gap nobody noticed.
+
+**A real bug this surfaced during verification:** the first `INSERT` into `notifications` used the same `$7` placeholder both as the `status` column value and inside a `CASE WHEN $7 = 'sent'` expression for `sent_at`. PostgreSQL couldn't settle on one type for that parameter (`notification_status` in one spot, implicit `text` in the other) and rejected every insert with "inconsistent types deduced for parameter $7" — silently, from fanout's point of view, since the failure was caught, logged, and swallowed by the same "never let a notification problem fail the alert" handling that makes this safe in production. Fixed by computing `sent_at` in JavaScript and passing it as its own parameter instead of asking SQL to branch on `$7` twice. Caught by checking the `notifications` table directly after triggering a real SOS, not by reading the code — the code looked correct.
+
+### Acknowledgement — `POST /emergency/alerts/:id/acknowledge`
+
+**Sets `acknowledged_at`/`acknowledged_by` (already existing, unused columns since Phase 0's schema) — does not change `status`.** Acknowledging and closing are different facts: acknowledging means "someone is on it, stop escalating"; only `cancel`/`resolve` actually end the alert. The alert stays `active` and keeps showing on the family dashboard exactly as before, just with an "Acknowledged by \<name\>" line added. Rejected: moving `status` to the existing-but-unused `'acknowledged'` enum value — that would have meant widening `cancel`/`resolve`'s `WHERE status = 'active'` guard to also accept `'acknowledged'`, for no actual benefit over a separate timestamp column that already existed for exactly this.
+
+**The alert's owner is excluded with no special-case code.** Permission is "a `family_links` row to the alert's owner with `can_acknowledge_alerts: true`" — the same check `resolve` already uses. `chk_not_self` in the schema means a `family_links` row from someone to themselves can never exist, so the owner always fails this check on their own alert without an explicit `if (alert.user_id === req.user.id)` branch anywhere.
+
+**A second acknowledgement gets `409 alert_already_acknowledged`, read as reassurance, not an error** — same pattern as `sos_already_active` from step 1. Someone else already being on it is good news for whoever just tapped the button second.
+
+### From the push notification itself, not only from inside the app
+
+The push sent for a new SOS carries an `sos-alert` notification category with an "Acknowledge" action button (`opensAppToForeground: false`), registered via `frontend/src/emergency/notifications/alertNotifications.js`. A response listener calls the acknowledge endpoint directly when that action fires, including via `getLastNotificationResponseAsync()` for the case where the app was launched cold by tapping it. **A plain tap on the notification — not the button — just opens the app and does nothing else.** Acknowledging is an explicit, first-person action; someone opening the app to look should not be silently recorded as "handling it."
+
+**Device token registration was missing entirely — `POST /emergency/device-tokens`, new.** `device_tokens` has existed since Phase 0's schema and was named as a Phase 1 deliverable in `WORK_DIVISION.md`, but nothing populated it until now: push had a table to read from and no way to ever put a row in it. Upserts on the token itself (already `UNIQUE`), not on `(user, device)` — a reinstall or an account switch on the same physical device correctly reassigns the row rather than creating a duplicate.
+
+**Frontend split across `shared/` and `emergency/`, same boundary as `captureLocation.js` from step 2.** `shared/notifications/{pushRegistration,notificationSetup}.js` know nothing about alerts — permission, getting a token, registering it, foreground display config. `emergency/notifications/{alertNotifications,NotificationsBridge}.js` own what an SOS push actually means and does, and compose the shared pieces with `useAuth()`. Push permission itself gets no custom plain-language rationale card the way location did in step 2 — a notification prompt is a much more familiar ask, and it wasn't part of what was requested here the way it explicitly was for GPS.
+
+**A real prerequisite surfaced, not worked around: Expo push tokens need an EAS `projectId`,** tied to an Expo account, which this project didn't have. Raised before writing any code rather than discovered by a runtime failure later. `registerForPushNotifications()` handles the missing case by logging a warning and returning `null` — nothing else in the app depends on it, so this blocks push specifically and nothing else until `eas init` (or a project created at expo.dev) provides a real id in `app.json`'s `extra.eas.projectId`. See the comments left there.
+
+### The cancel-vs-resolve open question — closed
+
+**Recommendation given, and accepted: `cancel` stays owner-only.** `can_acknowledge_alerts` does not extend to cancelling, only resolving, unchanged from step 1. The reasoning: `resolve` already covers a family-confirmed false alarm — `resolutionNotes` lets them write "confirmed false alarm by phone call," which is exactly the case the open question was about. Extending `cancel` to family would have cost something real: the alert-history feature from step 1 already shows "cancelled by them" versus "resolved by family" as two different, meaningful facts on the family dashboard. Letting family cancel too would have made "cancelled" stop reliably meaning "the person who pressed it says it was a mistake" — the one distinction that made `cancel` worth having as separate from `resolve` in the first place. No code changed as a result; this closes the question raised in the 2026-08-15 SOS entry (see "Open issues" above) without changing anything `routes.js` already does.
+
+### Verified
+
+Backend, against the running server and the real `eldercare` database, with `backend/scripts/seed-test-users.js` extended to seed two `emergency_contacts` for the test elderly account — one that's also the test family account (so fanout has a real `contact_user_id` to find a device token for), one that isn't (so escalating past contact 1 is actually testable):
+
+- An SOS fired, and after the `$7` bug above was fixed, the scheduler's next sweep self-healed the alert that had failed to fan out on creation — contact 1 notified by SMS and voice call, each recorded `failed` with the exact "set these `.env` variables" message, no push attempt (no device token existed yet) and no email attempt (that contact has no email in the seed data).
+- A second SOS, after registering a (fake) push token for the test family account via `POST /emergency/device-tokens`: push was attempted for real against Expo's live API, which correctly rejected the fabricated token and that rejection was recorded — confirming the whole dispatch-and-record pipeline end to end, not just the provider modules in isolation.
+- Acknowledging: the elderly owner gets `403 not_permitted` on their own alert; an unrelated account (admin, no family link) also gets `403`; the permitted family member gets `200`; acknowledging again gets `409 alert_already_acknowledged` with the current alert attached.
+- Escalation actually stopping: acknowledged an alert right after contact 1 was notified, then waited a full scheduler sweep (70+ seconds) and confirmed no notification row for contact 2 was ever created — not inferred from reading the code, checked against the database after the wait.
+- `GET /emergency/family/alerts` correctly reflects `acknowledgedAt`/`acknowledgedByName` before and after acknowledging.
+- `POST /emergency/device-tokens`: valid registration returns `201`; an invalid `platform` and a missing `expoPushToken` each return `400 validation_failed` naming the right field.
+- All test rows created during this (two alerts, their cascaded `notifications` rows, one device token) deleted afterwards. The two seeded `emergency_contacts` and the family link were left in place, same as `family_links` after step 1 — reusable fixtures, not one-off test data.
+
+Frontend: `npx expo export --platform android` bundled cleanly, 992 modules (up from 851 — `expo-notifications` and `expo-device`), no unresolved imports.
+
+**Not verified on a device.** Everything above is backend verification plus a bundle check. The push permission prompt, the actual "Acknowledge" action button rendering on a lock screen, and a real device token making a real push notification arrive have not been exercised on a phone — and per this task's framing, that matters more here than on most steps, since a notification path is exactly the kind of thing that can look right in code and still not work on real hardware.

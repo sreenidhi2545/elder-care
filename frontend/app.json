@@ -23,7 +23,11 @@
     "extra": {
       "//": "Add \"apiUrl\": \"http://host:5000\" here to point the app at a specific backend.",
       "//2": "With no apiUrl key, the app uses the computer running Metro — see src/shared/config.js.",
-      "//3": "Do not set it to null: Expo resolves a null here to {}, which is truthy."
+      "//3": "Do not set it to null: Expo resolves a null here to {}, which is truthy.",
+      "//4": "Push notifications need eas.projectId below, from a free Expo account.",
+      "//5": "Run `eas init` (needs eas-cli) or create a project at expo.dev, then add:",
+      "//6": "  \"eas\": { \"projectId\": \"...\" }",
+      "//7": "Until that exists, registerForPushNotifications() logs a warning and returns null — SOS itself is unaffected, only push delivery."
     },
     "plugins": [
       "expo-secure-store",
@@ -32,7 +36,8 @@
         {
           "locationWhenInUsePermission": "ElderCare uses your location so your family can see where you are if you press SOS."
         }
-      ]
+      ],
+      "expo-notifications"
     ]
   }
 }
