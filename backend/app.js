@@ -12,6 +12,7 @@ import express from 'express';
 import { checkConnection } from './shared/db/pool.js';
 import { ApiError } from './shared/http/errors.js';
 import { authRouter } from './shared/auth/routes.js';
+import { emergencyRouter } from './emergency/routes.js';
 
 export const app = express();
 
@@ -46,6 +47,7 @@ app.get('/health', async (req, res) => {
 });
 
 app.use('/auth', authRouter);
+app.use('/emergency', emergencyRouter);
 
 // Anything else is not a route yet.
 app.use((req, res) => {

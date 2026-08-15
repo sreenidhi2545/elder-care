@@ -39,6 +39,13 @@ const TEST_USERS = [
   { phone: '9000000004', fullName: 'Test Admin', role: 'admin' },
 ];
 
+// There is no invite/approve flow yet (see API.md, "Not yet built") — a
+// family_links row can only be created directly. Without one, the family
+// test account has nobody linked and the family dashboard has nothing to
+// show, which makes it untestable. All permissions true and status 'active'
+// so the seeded family account can exercise every gated action immediately.
+const TEST_FAMILY_LINK = { elderlyPhone: '9000000001', familyPhone: '9000000002' };
+
 const password = process.argv[2];
 
 if (!password) {
@@ -62,6 +69,8 @@ if (config.nodeEnv === 'production') {
 const passwordHash = await hashPassword(password);
 
 console.log(`Seeding ${TEST_USERS.length} test accounts into ${config.databaseUrl.replace(/:[^:@]*@/, ':****@')}\n`);
+
+const idByPhone = {};
 
 for (const user of TEST_USERS) {
   const normalized = normalizePhone(user.phone);
@@ -87,7 +96,39 @@ for (const user of TEST_USERS) {
   );
 
   const row = rows[0];
+  idByPhone[user.phone] = row.id;
   console.log(`  ${row.phone.padEnd(15)} ${row.role.padEnd(10)} ${row.inserted ? 'created' : 'updated'}`);
+}
+
+const elderlyId = idByPhone[TEST_FAMILY_LINK.elderlyPhone];
+const familyId = idByPhone[TEST_FAMILY_LINK.familyPhone];
+
+if (elderlyId && familyId) {
+  // Upsert on (elderly_user_id, family_user_id): re-running resets the
+  // permissions and status rather than colliding with the UNIQUE constraint.
+  const { rows } = await query(
+    `INSERT INTO family_links
+       (elderly_user_id, family_user_id, permission_level, status,
+        can_view_location, can_manage_contacts, can_manage_caregivers, can_acknowledge_alerts,
+        approved_at)
+     VALUES ($1, $2, 'owner', 'active', TRUE, TRUE, TRUE, TRUE, now())
+     ON CONFLICT (elderly_user_id, family_user_id) DO UPDATE
+        SET permission_level       = EXCLUDED.permission_level,
+            status                 = EXCLUDED.status,
+            can_view_location      = EXCLUDED.can_view_location,
+            can_manage_contacts    = EXCLUDED.can_manage_contacts,
+            can_manage_caregivers  = EXCLUDED.can_manage_caregivers,
+            can_acknowledge_alerts = EXCLUDED.can_acknowledge_alerts,
+            approved_at            = EXCLUDED.approved_at
+     RETURNING id, (xmax = 0) AS inserted`,
+    [elderlyId, familyId]
+  );
+
+  const link = rows[0];
+  console.log(`  family_link     ${TEST_FAMILY_LINK.familyPhone} -> ${TEST_FAMILY_LINK.elderlyPhone}  ${link.inserted ? 'created' : 'updated'}`);
+} else {
+  console.error('  family_link     SKIPPED — one or both test users were not seeded');
+  process.exitCode = 1;
 }
 
 console.log('\nSign in with any of the numbers above and the password you passed.');

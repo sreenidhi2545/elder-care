@@ -1,11 +1,11 @@
 # ElderCare — API Contract
 
-**Version:** 0.1 — Phase 0 (authentication only)
+**Version:** 0.2 — Phase 0 (authentication) + Phase 1 step 1 (SOS button and alert record)
 **Base URL (development):** `http://localhost:5000`
 
 This document is the agreement between the backend and the mobile app. Every endpoint the app is allowed to call is listed here. If you add an endpoint, add it to this file in the same Pull Request. If you need an endpoint that does not exist yet, raise it in the group rather than working around it.
 
-Only the authentication endpoints exist today. The emergency and caregiver endpoints arrive with Phases 1 and 2 and will be added to this file as they are built.
+The authentication endpoints and the emergency alert endpoints exist today. GPS ingestion, emergency contact notification, geofencing, and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
 
 ---
 
@@ -124,6 +124,11 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `POST` | `/auth/logout` | — | Revoke one refresh token |
 | `GET` | `/auth/me` | Bearer | The caller's own record |
 | `GET` | `/auth/admin/users` | Bearer + `admin` | List users |
+| `POST` | `/emergency/alerts` | Bearer | Press SOS |
+| `GET` | `/emergency/alerts` | Bearer | The caller's own alerts |
+| `POST` | `/emergency/alerts/:id/cancel` | Bearer | "That was a mistake" — alert owner only |
+| `POST` | `/emergency/alerts/:id/resolve` | Bearer | "This is handled" — owner or a permitted family member |
+| `GET` | `/emergency/family/alerts` | Bearer + `family` | Active alerts for elderly users the caller is linked to |
 
 ---
 
@@ -384,6 +389,153 @@ The 50 most recently created users. Admin only.
 
 ---
 
+## Emergency alerts
+
+Phase 1, step 1: the SOS button and the alert record only. Nothing here captures GPS (`latitude`/`longitude` on every alert are `null` for now) or sends a notification to anyone — those are separate steps and will extend this section when built. Every one of these endpoints requires `Authorization: Bearer <accessToken>`; the five error codes listed under [`GET /auth/me`](#get-authme) apply here too and are not repeated below.
+
+### `POST /emergency/alerts`
+
+Presses SOS for the signed-in user. `alertType` is always `sos`, `severity` is always `critical` — this button does not ask the person pressing it to grade their own emergency. No request body.
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "alert": {
+    "id": "9c0c0c9c-f8de-4f25-9c76-2662e8f9a139",
+    "userId": "68e6ca9c-a980-4509-b01d-cdc4c633bf95",
+    "alertType": "sos",
+    "status": "active",
+    "severity": "critical",
+    "latitude": null,
+    "longitude": null,
+    "message": null,
+    "triggeredAt": "2026-08-15T06:51:50.230Z",
+    "acknowledgedAt": null,
+    "acknowledgedBy": null,
+    "resolvedAt": null,
+    "resolvedBy": null,
+    "resolutionNotes": null,
+    "createdAt": "2026-08-15T06:51:50.230Z",
+    "updatedAt": "2026-08-15T06:51:50.230Z"
+  }
+}
+```
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `409` | `sos_already_active` | The caller already has an active SOS alert. The response carries `alert`, the existing one, in the same shape as above |
+
+**`sos_already_active` is not a failure to show the person pressing the button.** A second press while one alert is already open almost always means the same emergency pressed twice, not a second one — the app should read this as reassurance ("help is already on the way"), never as an error screen. See `ElderlyHomeScreen.js`.
+
+---
+
+### `GET /emergency/alerts`
+
+The caller's own alerts, newest first.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `status` | no | One of `active`, `acknowledged`, `resolved`, `cancelled`, `false_alarm` |
+| `limit` | no | Positive whole number, capped at 50. Defaults to 20 |
+
+**Response `200`**
+
+```json
+{ "status": "ok", "count": 1, "alerts": [ { "...": "same shape as POST /emergency/alerts" } ] }
+```
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | `status` is not a recognised value, or `limit` is not a positive whole number |
+
+---
+
+### `POST /emergency/alerts/:id/cancel`
+
+"That was a mistake" — only the person who triggered the alert may cancel it. A family member who believes it is a false alarm uses `resolve`, not `cancel`; only the person who pressed SOS can say it was pressed by accident.
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `note` | string | no | Up to 2000 characters, stored as `resolutionNotes` |
+
+**Response `200`** — the updated alert, `status: "cancelled"`, same shape as `POST /emergency/alerts`.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | `id` is not a UUID, or `note` fails validation |
+| `403` | `not_alert_owner` | The caller did not trigger this alert |
+| `404` | `alert_not_found` | No alert with that id |
+| `409` | `alert_not_active` | The alert is already cancelled, resolved, acknowledged or a false alarm |
+
+---
+
+### `POST /emergency/alerts/:id/resolve`
+
+"This is handled/over" — the alert's owner, or a family member with an `active` `family_links` row to that elderly user **and** `can_acknowledge_alerts: true`.
+
+**Request body:** same as `cancel` — optional `note`.
+
+**Response `200`** — the updated alert, `status: "resolved"`.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | `id` is not a UUID, or `note` fails validation |
+| `403` | `not_permitted` | The caller neither owns the alert nor has a permitted family link to its owner |
+| `404` | `alert_not_found` | No alert with that id |
+| `409` | `alert_not_active` | The alert is already closed |
+
+---
+
+### `GET /emergency/family/alerts`
+
+Active alerts for every elderly user the caller has an `active` `family_links` row with. Role-gated to `family`.
+
+**Every alert for every actively-linked elderly user is included**, regardless of `can_acknowledge_alerts` — a view-only family member still needs to know an emergency is happening, they just cannot close it out. Each alert carries `canAcknowledge` so the app knows whether to offer a "mark resolved" button; the `resolve` endpoint enforces the same permission server-side regardless of what the app shows.
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "count": 1,
+  "alerts": [
+    {
+      "id": "9c0c0c9c-f8de-4f25-9c76-2662e8f9a139",
+      "userId": "68e6ca9c-a980-4509-b01d-cdc4c633bf95",
+      "alertType": "sos",
+      "status": "active",
+      "severity": "critical",
+      "triggeredAt": "2026-08-15T06:51:50.230Z",
+      "...": "remaining fields as in POST /emergency/alerts",
+      "elderlyUser": { "fullName": "Test Elderly", "phone": "+919000000001" },
+      "canAcknowledge": true
+    }
+  ]
+}
+```
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `403` | `insufficient_role` | The caller's role is not `family` |
+
+---
+
 ---
 
 ## For the login and registration screens
@@ -427,10 +579,12 @@ Everything below is planned but does not exist. Do not code against it — it wi
 
 | Area | Phase | Owner |
 |---|---|---|
-| SOS alerts, GPS ingestion, emergency contacts, notification fanout | 1 | Sree |
+| GPS ingestion, emergency contacts, notification fanout (SMS/call/push) | 1 | Sree |
 | Caregiver profiles, search, booking, scheduling, attendance | 2 | [Teammate B] |
 | Geofences, breach detection, live location over WebSockets | 3 | Sree |
 | Care plans, activity reports, tasks, reviews | 4 | [Teammate B] |
 | Ambulance booking, disaster alerts, response centre, fall trigger | 5 | [Teammate C] |
 | Device token registration for push notifications | 1 | Sree |
 | Family links — invitations, approval, permissions | 1 | Sree |
+
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `GET /emergency/family/alerts` — see the "Emergency alerts" section above. `family_links` rows themselves must still be created directly (no invite/approve endpoint yet), so the family screen has nothing to show until one exists.

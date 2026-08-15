@@ -1,0 +1,170 @@
+// ============================================================================
+// Alerts — database access
+//
+// Every query for the `alerts` table used by Phase 1 step 1 (the SOS button)
+// lives here, same split as shared/auth/users.js: routes.js decides what is
+// allowed, this file only knows how to read and write rows.
+// ============================================================================
+
+import { query } from '../shared/db/pool.js';
+
+// An SOS is the most urgent thing this product records, so it does not wait
+// for a caller to say how severe it is — 'critical' is not a default so much
+// as the definition of what this button means.
+const SOS_SEVERITY = 'critical';
+
+/** Shapes a raw `alerts` row into the camelCase form the API returns. */
+export function toPublicAlert(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    alertType: row.alert_type,
+    status: row.status,
+    severity: row.severity,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    message: row.message,
+    triggeredAt: row.triggered_at,
+    acknowledgedAt: row.acknowledged_at,
+    acknowledgedBy: row.acknowledged_by,
+    resolvedAt: row.resolved_at,
+    resolvedBy: row.resolved_by,
+    resolutionNotes: row.resolution_notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** The caller's own currently-active SOS alert, if there is one. */
+export async function findActiveSosAlert(userId) {
+  const { rows } = await query(
+    `SELECT * FROM alerts
+      WHERE user_id = $1 AND alert_type = 'sos' AND status = 'active'
+      ORDER BY triggered_at DESC
+      LIMIT 1`,
+    [userId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Creates a new SOS alert. Does not check for an existing active one — that
+ * is a business rule, decided by the caller in routes.js, not a fact about
+ * how to write a row.
+ */
+export async function createSosAlert(userId) {
+  const { rows } = await query(
+    `INSERT INTO alerts (user_id, alert_type, status, severity, triggered_at)
+     VALUES ($1, 'sos', 'active', $2, now())
+     RETURNING *`,
+    [userId, SOS_SEVERITY]
+  );
+  return rows[0];
+}
+
+/** The caller's own alerts, newest first. */
+export async function listAlertsForUser(userId, { status, limit }) {
+  if (status) {
+    const { rows } = await query(
+      `SELECT * FROM alerts
+        WHERE user_id = $1 AND status = $2
+        ORDER BY triggered_at DESC
+        LIMIT $3`,
+      [userId, status, limit]
+    );
+    return rows;
+  }
+
+  const { rows } = await query(
+    `SELECT * FROM alerts
+      WHERE user_id = $1
+      ORDER BY triggered_at DESC
+      LIMIT $2`,
+    [userId, limit]
+  );
+  return rows;
+}
+
+export async function findAlertById(id) {
+  const { rows } = await query(`SELECT * FROM alerts WHERE id = $1`, [id]);
+  return rows[0] ?? null;
+}
+
+/**
+ * Moves an active alert to 'cancelled' or 'resolved'. Only ever touches a row
+ * that is still 'active' — the WHERE clause is the guard against acting on an
+ * alert someone already closed, done as one atomic statement rather than a
+ * read-then-write so two simultaneous requests cannot both succeed.
+ *
+ * Returns null if there was nothing active with that id to update, which the
+ * caller uses to distinguish "no such alert" from "already closed".
+ */
+async function closeActiveAlert(id, status, actorUserId, note) {
+  const { rows } = await query(
+    `UPDATE alerts
+        SET status = $2,
+            resolved_at = now(),
+            resolved_by = $3,
+            resolution_notes = COALESCE($4, resolution_notes)
+      WHERE id = $1 AND status = 'active'
+      RETURNING *`,
+    [id, status, actorUserId, note ?? null]
+  );
+  return rows[0] ?? null;
+}
+
+/** "That was a mistake" — only the person who triggered the alert calls this. */
+export function cancelAlert(id, actorUserId, note) {
+  return closeActiveAlert(id, 'cancelled', actorUserId, note);
+}
+
+/** "This is handled/over" — the owner or a permitted family member. */
+export function resolveAlert(id, actorUserId, note) {
+  return closeActiveAlert(id, 'resolved', actorUserId, note);
+}
+
+/**
+ * The family_links row between a family member and an elderly user, or null
+ * if none exists. routes.js uses this to decide both whether an alert may be
+ * shown at all (link must be 'active') and whether it may be resolved
+ * (can_acknowledge_alerts must be true).
+ */
+export async function findFamilyLink(familyUserId, elderlyUserId) {
+  const { rows } = await query(
+    `SELECT status, can_acknowledge_alerts
+       FROM family_links
+      WHERE family_user_id = $1 AND elderly_user_id = $2`,
+    [familyUserId, elderlyUserId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Active alerts for every elderly user linked to this family member with an
+ * 'active' family_links row. can_acknowledge_alerts is not filtered here —
+ * decision (B): a view-only family member still sees that an emergency is
+ * happening, they just cannot act on it. Each row carries canAcknowledge so
+ * the screen knows whether to offer the "mark resolved" button.
+ */
+export async function listActiveFamilyAlerts(familyUserId) {
+  const { rows } = await query(
+    `SELECT a.*,
+            u.full_name AS elderly_full_name,
+            u.phone AS elderly_phone,
+            fl.can_acknowledge_alerts
+       FROM alerts a
+       JOIN family_links fl ON fl.elderly_user_id = a.user_id
+       JOIN users u ON u.id = a.user_id
+      WHERE fl.family_user_id = $1
+        AND fl.status = 'active'
+        AND a.status = 'active'
+      ORDER BY a.triggered_at DESC`,
+    [familyUserId]
+  );
+
+  return rows.map((row) => ({
+    ...toPublicAlert(row),
+    elderlyUser: { fullName: row.elderly_full_name, phone: row.elderly_phone },
+    canAcknowledge: row.can_acknowledge_alerts,
+  }));
+}

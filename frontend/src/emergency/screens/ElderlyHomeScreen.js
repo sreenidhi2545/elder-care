@@ -1,20 +1,360 @@
-// Placeholder. Phase 1 replaces this with the real elderly home screen: one
-// large SOS button and very little else, per PROJECT_REPORT section 3.
-// Owner: Sree (emergency module).
+// ============================================================================
+// Elderly home screen — the SOS button
+//
+// Phase 1, step 1. One thing on this screen matters: getting help fast. Three
+// states:
+//
+//   idle       — the big SOS button
+//   confirming — a 5-second countdown overlay, cancellable, before anything
+//                is sent. This is what stops a pocket press from ever
+//                reaching the server.
+//   active     — an alert exists on the server; shows that plainly and offers
+//                a way to cancel it, itself behind one confirmation tap.
+//
+// No GPS, no notifications — those are separate steps. See BUILD_LOG.md.
+// ============================================================================
 
-import { PlaceholderScreen } from '../../shared/ui/PlaceholderScreen';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { cancelAlert, createSosAlert, listAlerts } from '../api/alerts';
+import { ApiError, NetworkError } from '../../shared/api/client';
+import { useAuth } from '../../shared/auth/AuthContext';
+import { colors, spacing, type } from '../../shared/ui/theme';
+
+const COUNTDOWN_SECONDS = 5;
+const POLL_ACTIVE_MS = 10_000;
+const POLL_IDLE_MS = 20_000;
 
 export function ElderlyHomeScreen() {
+  const { user, signOut } = useAuth();
+
+  // 'checking' | 'idle' | 'confirming' | 'sending' | 'active' | 'confirmingCancel' | 'cancelling'
+  const [phase, setPhase] = useState('checking');
+  const [alert, setAlert] = useState(null);
+  const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
+  const [banner, setBanner] = useState(null); // transient, non-scary status line
+  const countdownTimer = useRef(null);
+
+  const stopCountdown = useCallback(() => {
+    if (countdownTimer.current) {
+      clearInterval(countdownTimer.current);
+      countdownTimer.current = null;
+    }
+  }, []);
+
+  // ---------------------------------------------------------------------
+  // Checking for an alert already active — on load, and periodically.
+  // A failure here is never shown as an error: if we cannot tell whether an
+  // alert is active, the safest default is to leave the SOS button available
+  // rather than block someone who may be in a real emergency.
+  // ---------------------------------------------------------------------
+  const checkActive = useCallback(async () => {
+    try {
+      const { alerts } = await listAlerts({ status: 'active', limit: 1 });
+      if (alerts.length > 0) {
+        setAlert(alerts[0]);
+        setPhase((p) => (p === 'checking' || p === 'idle' || p === 'active' ? 'active' : p));
+      } else {
+        setAlert(null);
+        setPhase((p) => (p === 'checking' || p === 'active' ? 'idle' : p));
+      }
+    } catch {
+      setPhase((p) => (p === 'checking' ? 'idle' : p));
+    }
+  }, []);
+
+  useEffect(() => {
+    checkActive();
+  }, [checkActive]);
+
+  // Poll faster while an alert is active than while idle — an open emergency
+  // is worth checking on more often (e.g. a family member resolved it).
+  useEffect(() => {
+    if (phase !== 'idle' && phase !== 'active') return;
+    const intervalMs = phase === 'active' ? POLL_ACTIVE_MS : POLL_IDLE_MS;
+    const id = setInterval(checkActive, intervalMs);
+    return () => clearInterval(id);
+  }, [phase, checkActive]);
+
+  useEffect(() => stopCountdown, [stopCountdown]);
+
+  // ---------------------------------------------------------------------
+  // Pressing SOS
+  // ---------------------------------------------------------------------
+
+  function startCountdown() {
+    setCountdown(COUNTDOWN_SECONDS);
+    setPhase('confirming');
+
+    countdownTimer.current = setInterval(() => {
+      setCountdown((n) => {
+        if (n <= 1) {
+          stopCountdown();
+          fireSos();
+          return 0;
+        }
+        return n - 1;
+      });
+    }, 1000);
+  }
+
+  function cancelCountdown() {
+    stopCountdown();
+    setPhase('idle');
+  }
+
+  async function fireSos() {
+    setPhase('sending');
+    try {
+      const { alert: created } = await createSosAlert();
+      setAlert(created);
+      setPhase('active');
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'sos_already_active') {
+        // Not a failure — someone already pressed it (perhaps this same
+        // person, moments ago on another screen). Reassurance, not an error.
+        setBanner('Help is already on the way.');
+        await checkActive();
+        setPhase('active');
+        return;
+      }
+
+      // A genuine network problem while trying to send an SOS is the one
+      // moment this screen must not go quiet. Offer to try again immediately
+      // rather than showing a generic error and leaving someone stranded.
+      setBanner(
+        err instanceof NetworkError
+          ? 'Could not reach the server. Tap SOS to try again.'
+          : 'Something went wrong sending your alert. Tap SOS to try again.'
+      );
+      setPhase('idle');
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Cancelling an active alert — behind one confirmation, since dismissing a
+  // real emergency should not be as easy as raising one.
+  // ---------------------------------------------------------------------
+
+  async function confirmCancelAlert() {
+    if (!alert) return;
+    setPhase('cancelling');
+    try {
+      await cancelAlert(alert.id);
+      setAlert(null);
+      setBanner(null);
+      setPhase('idle');
+    } catch (err) {
+      // The alert may have just been resolved by a family member — either
+      // way, find out what is actually true rather than guessing.
+      await checkActive();
+      if (err instanceof NetworkError) {
+        setBanner('Could not reach the server. Your alert may still be active.');
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------
+
   return (
-    <PlaceholderScreen
-      title="Home"
-      subtitle="You are signed in as an elderly user."
-      comingSoon={[
-        'One-touch SOS button (Phase 1)',
-        'Location sharing with your family (Phase 1)',
-        'Safe zone alerts (Phase 3)',
-        'I fell — manual fall trigger (Phase 5)',
-      ]}
-    />
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <View style={styles.content}>
+        <Text style={styles.greeting}>Hello, {user?.fullName?.split(' ')[0] ?? 'there'}</Text>
+
+        {banner && (
+          <Pressable onPress={() => setBanner(null)} style={styles.banner}>
+            <Text style={styles.bannerText}>{banner}</Text>
+          </Pressable>
+        )}
+
+        <View style={styles.center}>
+          {phase === 'checking' && <ActivityIndicator size="large" color={colors.primary} />}
+
+          {(phase === 'idle' || phase === 'sending') && (
+            <>
+              <Pressable
+                onPress={startCountdown}
+                disabled={phase === 'sending'}
+                accessibilityRole="button"
+                accessibilityLabel="Press for help. Sends an emergency alert after a 5 second countdown you can cancel."
+                style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]}
+              >
+                {phase === 'sending' ? (
+                  <ActivityIndicator size="large" color={colors.surface} />
+                ) : (
+                  <Text style={styles.sosButtonText}>SOS</Text>
+                )}
+              </Pressable>
+              <Text style={styles.helpText}>Press for help</Text>
+              <Text style={styles.subText}>You'll have 5 seconds to cancel before it sends.</Text>
+            </>
+          )}
+
+          {(phase === 'active' || phase === 'confirmingCancel' || phase === 'cancelling') && (
+            <ActiveAlert
+              alert={alert}
+              phase={phase}
+              onRequestCancel={() => setPhase('confirmingCancel')}
+              onBackOut={() => setPhase('active')}
+              onConfirmCancel={confirmCancelAlert}
+            />
+          )}
+        </View>
+
+        <Pressable style={styles.signOutButton} onPress={signOut} accessibilityRole="button">
+          <Text style={styles.signOutText}>Sign out</Text>
+        </Pressable>
+      </View>
+
+      <Modal
+        visible={phase === 'confirming'}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelCountdown}
+      >
+        <View style={styles.overlay}>
+          <View style={styles.overlayCard}>
+            <Text style={styles.overlayTitle}>Sending SOS in</Text>
+            <Text style={styles.countdownNumber}>{countdown}</Text>
+            <Pressable
+              onPress={cancelCountdown}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel. Do not send an alert."
+              style={styles.bigCancelButton}
+            >
+              <Text style={styles.bigCancelButtonText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
+
+function ActiveAlert({ alert, phase, onRequestCancel, onBackOut, onConfirmCancel }) {
+  const minutesAgo = alert ? Math.max(0, Math.round((Date.now() - new Date(alert.triggeredAt)) / 60000)) : 0;
+
+  return (
+    <View style={styles.activeCard}>
+      <Text style={styles.activeTitle}>SOS Active</Text>
+      <Text style={styles.activeSubtitle}>
+        {minutesAgo === 0 ? 'Triggered just now' : `Triggered ${minutesAgo} minute${minutesAgo === 1 ? '' : 's'} ago`}
+      </Text>
+
+      {phase === 'active' && (
+        <Pressable
+          onPress={onRequestCancel}
+          accessibilityRole="button"
+          style={styles.safeButton}
+        >
+          <Text style={styles.safeButtonText}>I'm safe — cancel alert</Text>
+        </Pressable>
+      )}
+
+      {phase === 'confirmingCancel' && (
+        <View style={styles.confirmRow}>
+          <Text style={styles.confirmText}>Are you sure you're safe now?</Text>
+          <View style={styles.confirmButtons}>
+            <Pressable onPress={onBackOut} accessibilityRole="button" style={styles.confirmNoButton}>
+              <Text style={styles.confirmNoButtonText}>No, keep it active</Text>
+            </Pressable>
+            <Pressable onPress={onConfirmCancel} accessibilityRole="button" style={styles.confirmYesButton}>
+              <Text style={styles.confirmYesButtonText}>Yes, I'm safe</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {phase === 'cancelling' && <ActivityIndicator size="large" color={colors.text} />}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.background },
+  content: { flex: 1, padding: spacing.lg, gap: spacing.md },
+  greeting: { fontSize: type.heading, fontWeight: '600', color: colors.text },
+  banner: {
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    padding: spacing.md,
+  },
+  bannerText: { fontSize: type.body, color: colors.text, fontWeight: '600' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md },
+
+  sosButton: {
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  sosButtonPressed: { backgroundColor: '#961515' },
+  sosButtonText: { fontSize: 56, fontWeight: '800', color: colors.surface, letterSpacing: 2 },
+  helpText: { fontSize: type.heading, fontWeight: '700', color: colors.text },
+  subText: { fontSize: type.body, color: colors.textMuted, textAlign: 'center', maxWidth: 280 },
+
+  overlay: { flex: 1, backgroundColor: 'rgba(17,24,39,0.85)', alignItems: 'center', justifyContent: 'center' },
+  overlayCard: { alignItems: 'center', gap: spacing.lg, padding: spacing.xl },
+  overlayTitle: { fontSize: type.heading, color: colors.surface, fontWeight: '600' },
+  countdownNumber: { fontSize: 96, fontWeight: '800', color: colors.surface },
+  bigCancelButton: {
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    borderRadius: 16,
+    minWidth: 220,
+    alignItems: 'center',
+  },
+  bigCancelButtonText: { fontSize: type.heading, fontWeight: '700', color: colors.text },
+
+  activeCard: {
+    backgroundColor: '#FEE2E2',
+    borderRadius: 16,
+    padding: spacing.lg,
+    alignItems: 'center',
+    gap: spacing.md,
+    width: '100%',
+  },
+  activeTitle: { fontSize: 32, fontWeight: '800', color: colors.danger },
+  activeSubtitle: { fontSize: type.body, color: colors.text },
+  safeButton: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    minWidth: 240,
+    alignItems: 'center',
+  },
+  safeButtonText: { fontSize: type.body, fontWeight: '700', color: colors.text },
+  confirmRow: { alignItems: 'center', gap: spacing.md, width: '100%' },
+  confirmText: { fontSize: type.body, fontWeight: '600', color: colors.text },
+  confirmButtons: { gap: spacing.sm, width: '100%' },
+  confirmNoButton: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+  },
+  confirmNoButtonText: { fontSize: type.body, fontWeight: '600', color: colors.text },
+  confirmYesButton: {
+    backgroundColor: colors.success,
+    borderRadius: 12,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+  },
+  confirmYesButtonText: { fontSize: type.body, fontWeight: '700', color: colors.surface },
+
+  signOutButton: { alignItems: 'center', paddingVertical: spacing.sm },
+  signOutText: { fontSize: type.small, color: colors.textMuted },
+});

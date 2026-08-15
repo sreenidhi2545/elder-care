@@ -373,6 +373,64 @@ Rather than discard an already-pushed merge commit and force-push a from-scratch
 
 ---
 
+## 2026-08-15 — Phase 1, step 1: the SOS button and the alert record
+
+Deliberately scoped to just the button and the `alerts` row it creates. No GPS capture, no notification fanout to emergency contacts — those are separate steps, tracked as open items below rather than built ahead of being asked for.
+
+### Backend — `backend/emergency/{alerts.js, validate.js, routes.js}`, mounted at `/emergency` in `app.js`
+
+Five endpoints, all reusing the existing `requireAuth`/`requireRole` middleware and `ApiError` shape from Phase 0 — no new patterns introduced. Full request/response shapes are in `API.md` under "Emergency alerts"; this entry covers the decisions and the alternatives rejected.
+
+- **`POST /emergency/alerts` has no role check**, only `requireAuth`, scoped to the caller's own `user_id`. Nothing in the requirement said this must be `elderly`-only, and the elderly home screen's UI is what actually restricts who presses it in practice. Rejected: gating the endpoint to `elderly` — that would block a future case (a family member's own SOS, say) without being asked to, and the API layer restricting by role when the product spec didn't is exactly the kind of building-ahead this step was told not to do.
+
+- **One active SOS at a time per person.** A second `POST` while one is already `active` returns `409 sos_already_active` with the existing alert attached, rather than creating a duplicate row. Rejected: allowing multiple concurrent active SOS alerts for the same user — a shaky or repeated press is overwhelmingly the same emergency, not two, and duplicate active alerts would mean duplicate entries on the family screen for one event. The frontend treats this 409 as reassurance ("help is already on the way"), never as an error — a person pressing SOS must never be shown an error screen for the crime of pressing it twice.
+
+- **`severity` is hardcoded to `'critical'`, not accepted from the client.** An SOS press is definitionally the most urgent thing this product records; asking the person pressing it to also grade their own emergency adds a decision at the exact moment decisions are hardest. `alert_type` is likewise fixed to `'sos'` — this endpoint is the SOS button, not a general alert-creation endpoint.
+
+- **`cancel` and `resolve` are two separate endpoints, not one endpoint with an action field**, because they mean different things and are permitted to different people:
+  - **Cancel** ("that was a mistake") is owner-only. Only the person who pressed it can say it was pressed by accident.
+  - **Resolve** ("this is handled") is available to the owner or to a family member with an `active` `family_links` row and `can_acknowledge_alerts: true`. Family are often the ones actually responding, so they need a way to close it out.
+
+  Rejected: a single `PATCH .../status` endpoint taking `{ action: 'cancel' | 'resolve' }`. It would have made the permission check a branch inside one handler instead of the route table itself documenting who can do what — worse for a document meant to be read by someone still learning the codebase.
+
+- **Both `cancel` and `resolve` only act on a row that is still `status = 'active'`**, checked in the same `UPDATE ... WHERE id = $1 AND status = 'active'` statement rather than a read-then-write. Two simultaneous requests — say, the elderly user cancels at the same moment a family member resolves — can then only ever have one winner; the loser gets `409 alert_not_active` and re-reads the real state, rather than both succeeding and silently overwriting each other's `resolved_by`.
+
+- **`GET /emergency/family/alerts` — decision (B), confirmed with you before building:** every alert is shown for every elderly user with an `active` family link, regardless of `can_acknowledge_alerts`; each alert carries a `canAcknowledge` flag so the screen knows whether to offer a "mark resolved" button. Rejected: (A), hiding the alert entirely from view-only family members — a distant relative with view-only access still needs to know their grandparent pressed SOS, they just should not be the one closing it out. The `resolve` endpoint enforces the permission server-side regardless of what the screen shows, so (B) is not a security gap, only a friendlier default.
+
+- **Alert ids are checked against a UUID pattern before hitting the database**, returning `400 validation_failed` for a malformed id rather than letting Postgres throw and the generic error handler turn it into an opaque `500`.
+
+- **Added `notFound()` to `shared/http/errors.js`.** Every other status helper (`badRequest`, `unauthorized`, `forbidden`, `conflict`) already existed from Phase 0; `404` was the one auth never needed until an endpoint took an id in the URL.
+
+### Frontend — `frontend/src/emergency/{api/alerts.js, screens/ElderlyHomeScreen.js, screens/FamilyHomeScreen.js}`
+
+- **`ElderlyHomeScreen` is a five-second, cancellable countdown between the press and the request leaving the device**, per your instruction — raised from the three seconds I first proposed, to give someone with tremor or poor eyesight real time to cancel. Nothing is sent to the server until the countdown reaches zero, which is what stops a pocket press from ever reaching the backend at all — not a debounce or a confirmation dialog after the fact, but simply not making the request yet.
+
+- **Cancelling a live alert is behind its own one-tap confirmation** ("Are you sure you're safe?"), separate from the pre-send countdown. Dismissing a real, already-active emergency should not be exactly as easy as arming one — the countdown protects against an accidental press; this second, lighter gate protects against an accidental cancel.
+
+- **`sos_already_active` is handled as a distinct case, not passed through generic error handling.** The screen shows "Help is already on the way" and re-fetches the real alert state, and never renders this particular response as an error banner — per your instruction that someone pressing SOS must never see an error for doing so.
+
+- **Polling, not WebSockets, for both screens** — the real-time layer is Phase 3. Interval is adaptive per your instruction: 10 seconds while there is an alert to watch (active on the elderly screen; one or more in the family list), 20 seconds otherwise. This is flagged here explicitly as an interim mechanism, superseded when Phase 3's WebSocket layer lands, not a permanent design.
+
+- **A background poll failing does not overwrite a screen that is already showing correctly.** Only the initial load surfaces a "could not reach the server" banner; a subsequent silent poll that fails just leaves the last known state on screen and tries again next interval, rather than replacing a real alert list with an error every time one request times out.
+
+### Verified
+
+Backend: server started against the real `eldercare` database, seeded test accounts (`backend/scripts/seed-test-users.js`, re-run with a known password for this session) logged in as `elderly` and `family`. Exercised directly against the running server, not just read from the code: empty alert list before any alert exists; `POST /emergency/alerts` creates one; a second `POST` returns `409 sos_already_active` with the existing alert attached rather than creating a duplicate; a family member with `can_acknowledge_alerts: false` sees the alert in `GET /emergency/family/alerts` with `canAcknowledge: false` and is rejected with `403 not_permitted` on `resolve`; flipping the permission to `true` lets the same request succeed; a non-owner is rejected with `403 not_alert_owner` on `cancel`; resolving or cancelling twice returns `409 alert_not_active`; an unknown id returns `404 alert_not_found`; a malformed id returns `400 validation_failed` before touching the database; a request with no `Authorization` header returns `401 missing_token`. All test rows created during this were deleted afterwards.
+
+Frontend: `npx expo export --platform android` bundled cleanly, 839 modules, no unresolved imports — the same check Phase 0 used, proving the import graph from the entry point through both new screens compiles. **Not verified on a device** — nobody exercised the countdown, the confirm-to-cancel step, or the polling behaviour by actually pressing the button on a phone. That is real risk for a screen whose entire job is working correctly under stress; see "Open issues" below.
+
+### Left open — noted for you to decide, not decided here
+
+**Should `can_acknowledge_alerts` also permit cancelling, not just resolving?** Right now only the alert's owner can `cancel` — a family member with full acknowledge permission cannot. You asked for this to be left open rather than decided now. The case for extending it: a family member who has just spoken to the elderly person and confirmed it was a false alarm has no way to close it as anything other than "resolved," which is a different fact than "this was a mistake." The case against: cancel exists specifically to mean "the person who pressed it says it wasn't real," and a family member — even a trusted one — wasn't the one who pressed it, so their saying so is a different, weaker claim. Whichever way this goes, it is a one-line permission change in `routes.js`, not a schema change.
+
+**Not built, on purpose, per this step's scope:** GPS capture on the alert (`latitude`/`longitude` stay `null`), any write to `emergency_contacts`, any row in `notifications`, any SMS/call/push. These are the next two steps.
+
+**`ElderlyHomeScreen`'s initial "is there already an active alert" check fails open.** If `GET /emergency/alerts?status=active` fails on load (no network yet, say), the screen defaults to showing the idle SOS button rather than blocking on the check — the reasoning being that a broken background check must never be able to hide the SOS button from someone who needs it. The tradeoff: if that check's failure coincides with an alert that actually is active, the screen briefly shows "idle" until the create call's own `409` corrects it. Worth knowing if it ever looks like the screen "forgot" an active alert for a moment after a cold start with a flaky connection.
+
+**Not verified on a real device.** Bundling proves the code compiles; it does not prove the five-second countdown feels right, that the confirm-to-cancel step is easy to find under stress, or that polling behaves correctly when a phone's network drops and returns. This should happen before this step is considered actually done, not just committed.
+
+---
+
 ## 2026-08-15 — Build log audit: the append-and-commit-together rule had drifted
 
 Run because the rule at the top of this file — append an entry after every completed step, commit it with the work — was suspected of not having been followed consistently since the very first (2026-08-05) session. It hadn't been, though not in the way expected.
