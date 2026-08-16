@@ -307,6 +307,8 @@ There is no `updated_at`, because a position reading is a fact about a moment an
 - **Privacy.** Continuous location history is the most sensitive data this product holds. Keeping only what is useful is both the decent choice and the defensible one if a client or regulator ever asks why we hold it.
 - **Nothing important is lost.** The positions that actually matter — where someone was when an alert fired — are copied onto the `alerts` row itself (§2.8) and are never touched by this cleanup. Purging location history does not erase a single emergency record. This is precisely why that denormalisation exists.
 
+*Confirmed against a real feature, not just this original estimate:* Phase 3, step 2 landed the first continuous producer of this table — background location tracking, 90-second time floor with a 75-metre distance filter. Worst case (continuously moving) is roughly 960 rows/user/day; the typical case (mostly stationary) is far fewer. Both stay well inside the 2,880/day envelope above, so the 30-day retention policy and the volume assumption behind it still hold without any change.
+
 *What is not being built now:* the deletion job itself. **The cleanup job is Phase 6**, per your decision. Until it runs, the table simply grows; at Phase 0 and 1 volumes that is harmless. The job will be a scheduled `DELETE FROM locations WHERE recorded_at < now() - INTERVAL '30 days'`, run daily in batches so it never holds a long lock.
 
 *A note for whoever writes that job:* delete in chunks of a few thousand rows rather than in one statement. A single `DELETE` covering millions of rows takes a long transaction, bloats the write-ahead log, and can block writes — which in this product means blocking the recording of an emergency location.

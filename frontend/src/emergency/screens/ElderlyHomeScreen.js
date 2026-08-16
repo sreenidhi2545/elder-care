@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { cancelAlert, createSosAlert, listAlerts } from '../api/alerts';
 import { recordLocation } from '../api/locations';
@@ -30,6 +31,11 @@ import {
   getLocationPermissionStatus,
   requestLocationPermission,
 } from '../../shared/location/captureLocation';
+import {
+  enableBackgroundTracking,
+  disableBackgroundTracking,
+  reconcileTrackingState,
+} from '../../shared/location/backgroundTracking';
 import { useAuth } from '../../shared/auth/AuthContext';
 import { colors, spacing, type } from '../../shared/ui/theme';
 
@@ -56,6 +62,9 @@ export function ElderlyHomeScreen() {
   const [locationPermission, setLocationPermission] = useState('checking');
   const [locationShared, setLocationShared] = useState(false);
   const sosLocationRef = useRef(null); // in-flight capture promise during the countdown
+
+  // 'checking' | 'off' | 'enabling' | 'on' | 'foreground_denied' | 'background_denied'
+  const [trackingPhase, setTrackingPhase] = useState('checking');
 
   const stopCountdown = useCallback(() => {
     if (countdownTimer.current) {
@@ -134,6 +143,65 @@ export function ElderlyHomeScreen() {
     if (status === 'granted') {
       await captureAndShareLocation();
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // Continuous background tracking — separate from the one-shot sharing
+  // above (Phase 3 step 2). Re-checked whenever this screen regains focus,
+  // not just on mount: covers coming back from the system Settings screen
+  // after granting "Allow all the time" on Android 11+, where the in-app
+  // prompt can't grant it directly (see backgroundTracking.js) — if the
+  // permission is now granted, this retries starting the task automatically
+  // rather than making the person hunt for the button again.
+  // ---------------------------------------------------------------------
+  // A ref, not a dependency: useCallback below is memoized once so
+  // useFocusEffect only fires on an actual focus transition, not on every
+  // trackingPhase change — the effect still needs the *current* phase when
+  // it runs, so it reads it from a ref kept in sync, same pattern as
+  // sosLocationRef above.
+  const trackingPhaseRef = useRef(trackingPhase);
+  useEffect(() => {
+    trackingPhaseRef.current = trackingPhase;
+  }, [trackingPhase]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      (async () => {
+        if (trackingPhaseRef.current === 'background_denied') {
+          setTrackingPhase('enabling');
+          const result = await enableBackgroundTracking();
+          if (!cancelled) setTrackingPhase(result.started ? 'on' : result.reason);
+          return;
+        }
+
+        const active = await reconcileTrackingState();
+        if (cancelled) return;
+        setTrackingPhase((prev) => {
+          if (active) return 'on';
+          // A denied-permission explanation should stay on screen until the
+          // user actually acts on it, not reset to a bare "off" on every
+          // refocus.
+          return prev === 'foreground_denied' || prev === 'background_denied' ? prev : 'off';
+        });
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [])
+  );
+
+  async function handleEnableTracking() {
+    setTrackingPhase('enabling');
+    const result = await enableBackgroundTracking();
+    setTrackingPhase(result.started ? 'on' : result.reason);
+  }
+
+  async function handleDisableTracking() {
+    await disableBackgroundTracking();
+    setTrackingPhase('off');
   }
 
   // ---------------------------------------------------------------------
@@ -259,6 +327,11 @@ export function ElderlyHomeScreen() {
                 permission={locationPermission}
                 shared={locationShared}
                 onEnable={handleEnableLocationSharing}
+              />
+              <BackgroundTrackingCard
+                phase={trackingPhase}
+                onEnable={handleEnableTracking}
+                onDisable={handleDisableTracking}
               />
             </>
           )}
@@ -386,6 +459,79 @@ function LocationSharingCard({ permission, shared, onEnable }) {
       </Text>
       <Pressable onPress={onEnable} accessibilityRole="button">
         <Text style={styles.locationLink}>Enable location sharing</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+/**
+ * Continuous background tracking — deliberately a separate card from
+ * LocationSharingCard above, not folded into it. That one is a single
+ * foreground capture tied to this session; this is an ongoing background
+ * service with its own permission step (foreground, then background) and
+ * its own on/off state the elderly user controls. Conflating the copy for
+ * both risks the elderly user not understanding what either one actually
+ * does. See BUILD_LOG.md, Phase 3 step 2.
+ */
+function BackgroundTrackingCard({ phase, onEnable, onDisable }) {
+  if (phase === 'checking') return null;
+
+  if (phase === 'enabling') {
+    return (
+      <View style={styles.locationCard}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (phase === 'on') {
+    return (
+      <View style={styles.locationCard}>
+        <Text style={styles.locationText}>
+          Continuous location tracking is on. Your family can see where you are, even when
+          ElderCare isn't open. A notification stays on screen the whole time this is on.
+        </Text>
+        <Pressable onPress={onDisable} accessibilityRole="button">
+          <Text style={styles.locationLink}>Turn off</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (phase === 'background_denied') {
+    return (
+      <View style={styles.locationCard}>
+        <Text style={styles.locationText}>
+          Continuous tracking needs "Allow all the time" turned on in your phone's Settings — it
+          can't be turned on from inside the app on this version of Android.
+        </Text>
+        <Pressable onPress={() => Linking.openSettings()} accessibilityRole="button">
+          <Text style={styles.locationLink}>Open settings</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (phase === 'foreground_denied') {
+    return (
+      <View style={styles.locationCard}>
+        <Text style={styles.locationText}>Continuous tracking needs location permission, which is currently off.</Text>
+        <Pressable onPress={() => Linking.openSettings()} accessibilityRole="button">
+          <Text style={styles.locationLink}>Open settings</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  // 'off' (also covers 'unsupported_platform' — nothing more to offer there)
+  return (
+    <View style={styles.locationCard}>
+      <Text style={styles.locationText}>
+        Turn on continuous tracking so your family can see where you are even when ElderCare
+        isn't open. SOS works the same either way.
+      </Text>
+      <Pressable onPress={onEnable} accessibilityRole="button">
+        <Text style={styles.locationLink}>Turn on continuous tracking</Text>
       </Pressable>
     </View>
   );

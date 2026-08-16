@@ -16,6 +16,13 @@
 // an SOS notification. configureNotificationHandler() is called once at
 // module load, not inside a component — it's configuration, not a
 // subscription, so it needs no cleanup.
+//
+// Phase 3 step 2 adds the side-effect-only import of backgroundLocationTask
+// below. It must be imported here, at the top of the app's static import
+// graph, not from inside a screen component — TaskManager.defineTask has to
+// run on every bundle load, including a headless one where no screen ever
+// mounts, or the OS has a location task registered natively with no JS
+// handler to deliver to. See that file's own header for the full reasoning.
 // ============================================================================
 
 import { NavigationContainer } from '@react-navigation/native';
@@ -26,6 +33,7 @@ import { AuthProvider } from './shared/auth/AuthContext';
 import { RootNavigator } from './shared/navigation/RootNavigator';
 import { NotificationsBridge } from './emergency/notifications/NotificationsBridge';
 import { configureNotificationHandler } from './shared/notifications/notificationSetup';
+import './shared/location/backgroundLocationTask';
 
 configureNotificationHandler();
 

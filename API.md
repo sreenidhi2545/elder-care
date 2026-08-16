@@ -686,6 +686,8 @@ Records one GPS reading for the caller. Phase 1, step 2: capture and storage onl
 
 **This is unrelated to the location the app may send with `POST /emergency/alerts`.** That request writes straight onto the alert's own `latitude`/`longitude` for durability past the 30-day location purge; it does not create a row here, and this endpoint does not touch `alerts`. Two separate concerns: general location history, and what an alert remembers about itself.
 
+**Phase 3, step 2 adds a second, regular caller: background location tracking.** While an elderly user has turned it on, the app calls this exact endpoint roughly every 90 seconds (subject to a 75-metre minimum-movement filter — see BUILD_LOG.md for the battery reasoning), with no change to the request or response shape above. Readings captured while the device is offline are queued on the device and sent once connectivity returns, each still carrying its own `recordedAt` from when it was actually taken rather than when it was finally delivered — the same offline-arrival case `SCHEMA_DESIGN.md` §2.7 already designed `recorded_at` for.
+
 ---
 
 ### `POST /emergency/device-tokens`

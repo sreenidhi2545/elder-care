@@ -686,3 +686,72 @@ Three build profiles, the standard EAS shape:
 ### Left open — for steps 2 and 3
 
 Once the dev build is installed: background location tracking (a `TaskManager`-registered task, `Location.startLocationUpdatesAsync`, and the plain-language rationale + Android's own "Allow all the time" settings flow, since Android 11+ won't grant background location from the same prompt as foreground) is step 2. Geofencing (`Location.startGeofencingAsync`, safe zones per elderly user, breach detection) is step 3. Neither is touched here — this step is the build capability only.
+
+---
+
+## 2026-08-16 — Phase 3, step 2: background location tracking
+
+Scope, per your instruction: capture and storage only. No geofencing, no map UI — those are steps 3 and 4. Reuses `POST /emergency/locations` from Phase 1 step 2 unchanged; no backend or schema change.
+
+### Checked before building: do steps 3 and 4 need further native modules?
+
+Per your instruction, checked ahead so this is one rebuild instead of two.
+
+- **Step 3 (geofencing) needs nothing new.** `Location.startGeofencingAsync` is part of `expo-location`, already installed since Phase 1 step 2, and runs on the same `expo-task-manager` foundation this step already needs. Nothing more to add.
+- **Step 4/5 (map UI) will need a map renderer — `react-native-maps` is the standard choice — but that wasn't installed here.** Unlike `expo-task-manager`/`expo-file-system`, it isn't self-contained: Android needs a real Google Maps API key (a Google Cloud project, Maps SDK enabled, likely billing) before it renders anything, which is an account decision, not a code one. Installing a native module now that sits inert until that key exists seemed worse than one more rebuild later, so it's deliberately deferred rather than added speculatively. Flagged here so it's a decision, not an oversight, for whoever starts step 4/5.
+
+### The headless-context problem this step is actually built around
+
+Android can wake this app to deliver a location update while it's fully closed — not backgrounded, closed. When it does, the JS bundle runs **headless**: no React tree mounts, no `App()` renders, no `AuthProvider` `useEffect` ever fires. That single fact shaped almost every decision below, because it means the existing `shared/api/client.js` — whose Bearer-token wiring (`configureApiClient`) is set up *inside* `AuthProvider`'s mount effect — is simply not available to code that has to run in that context.
+
+- **`TaskManager.defineTask` lives in its own file (`backgroundLocationTask.js`) imported at the top of `App.js`, not from inside a screen component.** Module-level code runs on every bundle load, headless or not, as a plain consequence of how JS module evaluation works — that's what makes it safe to rely on here, and it's the one thing that has to be true or the OS ends up with a native task registered with no JS handler to deliver to.
+- **A separate, self-contained request path (`backgroundLocationApi.js`) instead of reusing `apiRequest`.** It reads tokens straight from `tokenStore` (SecureStore — safe to call outside React, unlike `AuthContext`'s in-memory ref) and repeats `client.js`'s refresh-on-401 dance in miniature: on `401 token_expired`, calls `/auth/refresh` directly, saves the renewed pair, retries once. On an unrecoverable refresh failure (invalid/reused/expired/revoked — the same codes `API.md` documents under `/auth/refresh`), it clears the stored tokens and **stops the tracking task itself** — there's no legitimate way to keep reporting location without a session, and leaving the foreground-service notification running for a dead session would be actively misleading.
+
+### Update interval and distance filter — the tradeoff, as approved
+
+**90-second time floor, 75-metre distance filter, `Accuracy.Balanced`.** Balanced (not High/BestForNavigation) lets Android blend cell/Wi-Fi positioning and duty-cycle the GPS chip instead of holding a continuous lock — ~100m accuracy is enough for "roughly where," and it's the same accuracy SOS-time capture already uses (`captureLocation.js`, Phase 1 step 2) for the same reason. The distance filter matters more than the timer for battery: a stationary phone (most of an elderly user's day, typically) barely gets sampled at all, since nothing has moved 75m; the time floor exists only so a slow walker still gets *a* reading rather than waiting on distance alone. Worst-case staleness is ~90 seconds while someone's moving continuously — accepted, because this is a passive reassurance feature ("roughly where are they"), not a live tracker.
+
+### Volume check against `SCHEMA_DESIGN.md` §2.7 — confirmed, footnote added
+
+§2.7's worst case ("one reading per 30 seconds") is ~2,880 rows/user/day, and the 30-day retention window was sized against that number as a forward-looking estimate — before this step, nothing produced continuous volume; Phase 1's captures were one-shot and negligible. At 90s/75m, worst case (continuously moving) is ~960 rows/user/day; typical (mostly stationary) is far fewer. **Both stay comfortably inside the documented envelope — no schema or retention change needed.** Added one paragraph to §2.7 recording this as the first real confirmation of that estimate, not just the original forward-looking number.
+
+### Offline queue — `shared/location/locationQueue.js`, new dependency `expo-file-system`
+
+A JSON file, not SecureStore: SecureStore's encrypted-storage backing on Android has a practical per-value size limit a growing array of readings would eventually hit, and nothing queued here is a credential — it's the same coordinates already sent in plaintext once delivered, so encryption buys nothing that would justify that limit. Installed via `npx expo install`, matched to SDK 54 (`19.0.23`).
+
+**Used via `expo-file-system/legacy`, not the new synchronous/JSI `File`/`Directory` API this same package version also ships.** The new API is real and simpler in places, but a headless background context — hard to attach a debugger to, hard to reproduce a failure from — is exactly the wrong place to be the first code in this project to hit a rough edge in a newer API. The legacy `writeAsStringAsync`/`readAsStringAsync`/`getInfoAsync` functions are the well-worn, promise-based ones already stylistically consistent with the rest of this codebase.
+
+**Every task delivery appends to the queue, then attempts to flush the whole thing, oldest-first, stopping at the first send that can't complete.** No dedicated connectivity listener (no `NetInfo` dependency added): the next scheduled task tick already retries automatically once the phone's back online, which bounds the worst-case delay to one interval (90s) — judged not worth a native dependency just to shave that down to "instantly."
+
+**Capped at 2,000 entries (~2 days at worst-case cadence); oldest dropped first past the cap, and — per your instruction — the drop itself is recorded, not silent.** Each eviction appends `{ count, at }` to a bounded drop log (`getDropHistory()`, capped at the 50 most recent) written to the same queue file, plus a `console.warn` at the moment it happens. A month-old queued reading has essentially no safety value by the time it would ever be sent, but a silent gap in the location trail with nothing pointing at why would have been a real regression against the spirit of "don't lose readings" — this is the compromise: still bounded, but the loss is now a fact the app (or a future diagnostics screen) can actually surface, not a mystery.
+
+**A permanently-rejected reading (any 4xx other than an expired token) is also dropped from the queue, logged separately, not counted in the capacity drop log.** Shouldn't happen — the task builds every field itself — but a single malformed reading must not block everything queued behind it forever if it ever does.
+
+### Permission flow — `shared/location/backgroundTracking.js`
+
+Foreground first (already built, Phase 1 step 2, reused as-is), then a second card asking for background, only shown once foreground is granted. Android's own behaviour splits in two by OS version, and the card has to answer both:
+
+- **Android 10:** `requestBackgroundPermissionsAsync()`'s OS dialog offers "Allow all the time" directly.
+- **Android 11+:** the OS dialog won't offer that option at all — Google's anti-abuse restriction — so it can only be turned on from system Settings. The card detects this (the request call comes back still not granted) and switches to an "Open settings" link, same `Linking.openSettings()` pattern the existing foreground-denied case already uses.
+
+**Coming back from Settings is handled automatically, not left for the user to notice and retry.** `ElderlyHomeScreen` re-checks on every `useFocusEffect`, and if it was showing the "background_denied" explanation, it silently retries `enableBackgroundTracking()` on refocus — if permission is now granted, tracking just starts; if not, the same explanation stays up. (Caught one bug writing this: the retry check originally read `trackingPhase` directly inside a `useCallback` memoized with an empty dependency array, which would have frozen it at its initial value forever — the effect would never have noticed the phase actually changed. Fixed by reading a ref kept in sync via its own effect, the same pattern `sosLocationRef` above it already uses for the same reason.)
+
+### On/off — a new, separate card on `ElderlyHomeScreen`, as approved
+
+"Continuous location tracking," deliberately not merged into the existing "Location sharing" card: one is a single foreground capture tied to this session, the other an ongoing background service with its own two-step permission flow — conflating the copy for both risked the elderly user not understanding what either one actually does. States: off → enabling → on (shows a "Turn off" button; the persistent Android foreground-service notification is the other place this is visible, and arguably the more important one — it's there even if the app is never reopened) → the two denied-permission explanations above.
+
+**Reconciled against OS reality on every mount/focus, not just trusted from the stored preference.** If the OS silently killed the task (permission revoked in system settings later, battery optimisation, etc.) but the stored preference still says "on," the preference is corrected to match what's actually running rather than the screen claiming tracking is on when it isn't — the same "don't lie about state" instinct as this screen's active-alert check already failing open instead of guessing.
+
+**Turning tracking off stops new captures; it does not discard whatever's already queued.** Those readings were legitimately captured while it was on — losing them on top of the phone having been offline would be worse than sending them slightly late.
+
+**Signing out stops tracking — `AuthContext.js`, both `signOut()` and `onSessionEnded`.** A logged-out phone must not keep running a foreground service and showing a notification for a session that no longer exists; `onSessionEnded` covers the case where the server ends the session out from under an otherwise-still-open app (e.g. refresh-token reuse detected — see Phase 0's auth entry), not only the deliberate sign-out button.
+
+### New files (frontend only)
+
+`shared/location/backgroundLocationTaskName.js` (the shared task-name constant, its own file specifically to avoid a circular import between the task definition and the start/stop control module), `backgroundLocationTask.js`, `backgroundLocationApi.js`, `backgroundTracking.js`, `locationQueue.js`. Edits: `ElderlyHomeScreen.js` (new card), `AuthContext.js` (stop tracking on sign-out/session-end), `App.js` (top-level task import).
+
+### Verified
+
+`npx expo config --type prebuild` confirms `expo-file-system`'s config plugin auto-applies during the real build (adds `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, `INTERNET`) with no `app.json` edit needed — checked rather than assumed, same discipline as reading `expo-location`'s plugin source in the step-1 entry above. `npx expo export --platform android` bundles cleanly at 1,005 modules (up from 992 — `expo-file-system` and its transitive deps), no unresolved imports, no circular-import failures despite five new files with real dependencies between them.
+
+**Not yet verified on a device — the dev build this step needs is being kicked off now; see the follow-up entry once it completes.** Permission prompts (both steps), the foreground-service notification actually appearing, a real background delivery while the app is closed, and the offline-queue-and-flush path are exactly the things a bundle check cannot prove.

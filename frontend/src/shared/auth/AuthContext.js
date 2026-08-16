@@ -22,6 +22,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { configureApiClient } from '../api/client';
 import * as authApi from '../api/auth';
 import { clearTokens, loadTokens, saveTokens } from './tokenStore';
+import { disableBackgroundTrackingSilently } from '../location/backgroundTracking';
 
 const AuthContext = createContext(null);
 
@@ -49,6 +50,9 @@ export function AuthProvider({ children }) {
       onSessionEnded: async () => {
         tokens.current = { accessToken: null, refreshToken: null };
         await clearTokens();
+        // A dead session must not keep a background-location foreground
+        // service running — see backgroundTracking.js.
+        await disableBackgroundTrackingSilently().catch(() => {});
         setUser(null);
         setStatus('signedOut');
       },
@@ -141,6 +145,10 @@ export function AuthProvider({ children }) {
           // Offline, or the token was already revoked. Neither changes what
           // happens next.
         }
+
+        // Same reasoning as onSessionEnded above: no session, no business
+        // running a location-tracking foreground service.
+        await disableBackgroundTrackingSilently().catch(() => {});
 
         tokens.current = { accessToken: null, refreshToken: null };
         await clearTokens();
