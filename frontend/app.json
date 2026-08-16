@@ -10,6 +10,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.sree25.eldercare",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -41,7 +42,9 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "ElderCare uses your location so your family can see where you are if you press SOS."
+          "locationWhenInUsePermission": "ElderCare uses your location so your family can see where you are if you press SOS.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       "expo-notifications"

@@ -637,3 +637,50 @@ Frontend: `npx expo export --platform android` bundled cleanly, 992 modules (up 
 - Notifications: push delivered end to end through the new EAS project, including the "Acknowledge" action button rendering and working from the lock screen, both as a direct tap and via `getLastNotificationResponseAsync()` on a cold app launch. SMS and voice call attempts against Twilio (not yet configured) and DLT (not yet registered, per the Phase 1 milestone note in `WORK_DIVISION.md` section 8) are correctly recorded in `notifications` as `failed` with the exact missing-configuration reason, rather than silently dropped — the audit trail behaves the same on a real device as it did in the step-3 backend verification.
 
 **`WORK_DIVISION.md` section 6 updated to match** — a new "Emergency core (Phase 1) — complete, verified on real devices" block and a Phase 1 steps table (all three **Done**, owner Sree), in the same style as the existing Phase 0 tables. Section 8's step-by-step breakdown was already correct and needed no change — it describes the plan, not progress, per its own stated split from section 6.
+
+---
+
+## 2026-08-16 — Phase 3, step 1: development build configured (not yet run)
+
+Scope, deliberately narrow: get the project ready to leave Expo Go for a custom dev client on Android, and install the native modules Phase 3 needs. No geofencing, no background-tracking code — those are steps 2 and 3. This entry covers configuration only; the actual `eas build` and on-device install are the next action, not yet taken.
+
+### Why this step has to come first
+
+Flagged repeatedly since the 2026-08-12 SDK-downgrade entry: Expo Go only runs the JS/managed-API surface Expo ships in the store build. Background location — reading position while the app is not in the foreground, which both step 2 and geofencing in step 3 depend on — needs a native `expo-task-manager` background task registered in the compiled app, which Expo Go cannot do at all. There is no way to build any of the rest of Phase 3 without a custom dev client first.
+
+### New dependencies — `expo-dev-client`, `expo-task-manager`
+
+Both added via `npx expo install` so they land at the versions SDK 54 expects, same discipline as every native module added so far (`expo-location`, `expo-battery`, `expo-notifications`, `expo-device`).
+
+- **`expo-dev-client`** replaces the Expo Go app itself — it's what turns a normal build into one that can load this project's JS bundle from Metro over Wi-Fi the same way Expo Go does today, except now carrying whatever native modules the project actually has installed. No app code depends on it directly; installing it is what changes `expo build`'s output.
+- **`expo-task-manager`** is the one native module actually needed for this step. It isn't used by any feature yet — no background task is registered anywhere in this commit — but both background location (step 2) and geofencing (step 3, `Location.startGeofencingAsync`) are built on it under the hood, so it has to be present in the compiled binary before either can be written. Installing it now, ahead of the code that uses it, is the one deliberate exception to this project's usual "don't build ahead of being asked" rule: unlike a JS dependency, a missing native module can't be added without a new build, so step 2 would otherwise mean stopping mid-step to rebuild.
+
+**No separate geofencing library.** `expo-location`'s own geofencing API (`Location.startGeofencingAsync`) is what step 3 will use — it's already installed from Phase 1 step 2, and it's built on the same `expo-task-manager` foundation as background location rather than a second one. Nothing more to add for that later step than what's already here.
+
+### `app.json` — background location permission, package name
+
+- **`android.package` set to `com.sree25.eldercare`.** EAS Build requires one — there was none before because Expo Go doesn't need an application id, it runs everyone's JS inside its own. Chosen to match the Expo account (`sree25`) this project is already under. **This is a decision you should confirm, not one to treat as final by default:** it's cheap to change now, on a dev/internal build nobody has installed from a store, but effectively permanent the moment a `production` build is submitted to the Play Store — Google ties the listing to this string for the life of the app.
+
+- **`expo-location` plugin config gains `isAndroidBackgroundLocationEnabled: true` and `isAndroidForegroundServiceEnabled: true`.** Verified with `npx expo config --type public` that the resolved manifest permissions now include `ACCESS_BACKGROUND_LOCATION`, `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_LOCATION` alongside the two foreground permissions already there since Phase 1 step 2 — read from `expo-location`'s own plugin source (`node_modules/expo-location/plugin/build/withLocation.js`) rather than assumed, since Android's background-location manifest requirements are exactly the kind of thing worth checking rather than guessing. `isAndroidForegroundServiceEnabled` matters specifically because Android 14 (API 34) rejects a location-type foreground service that doesn't declare `FOREGROUND_SERVICE_LOCATION` — without it, step 2's background tracking would work in testing on an older phone and fail silently on a newer one.
+
+- **Not added: any iOS background-location config.** `isIosBackgroundLocationEnabled` and the `locationAlways...` permission strings are left unset — this step is scoped to Android per your instruction, and setting iOS values now would be building ahead of a platform this step isn't touching.
+
+- **No manual `android.permissions` edit.** The plugin adds the three new permissions to the manifest itself during prebuild; hand-adding them to the `permissions` array as well would just be the same fact stated twice, with the two copies free to drift.
+
+### `eas.json` — new file
+
+Three build profiles, the standard EAS shape:
+
+- **`development`** — `developmentClient: true`, `distribution: "internal"`, Android `buildType: "apk"`. This is the one this step's `eas build` will actually use: an APK (installable directly, no Play Store) carrying the dev client, so Metro can push JS to it the way Expo Go did.
+- **`preview`** — same internal/APK shape, no dev client. Not needed yet; included because a "give this to someone to test without Metro running" build is the obvious next thing once a feature is ready, and it costs nothing to have the profile ready.
+- **`production`** — Android `buildType: "app-bundle"`, the format the Play Store actually wants. Also not needed yet — there's no store listing — but `app-bundle` vs `apk` is the kind of setting worth getting right once rather than debugging later.
+
+### Verified
+
+`npx expo config --type public` resolves cleanly: `android.package` present, all five Android location/foreground-service permissions present, `expo-task-manager` and `expo-dev-client` both listed as installed dependencies with SDK-54-matched versions, `owner`/`extra.eas.projectId` unchanged from the existing `@sree25/eldercare` project. `npx expo export --platform android` bundles cleanly at 992 modules — unchanged from step 3's count, because neither new package is imported by any code yet; installing a native module without using it from JS doesn't move the bundle.
+
+**Not run yet: `eas build --profile development --platform android`.** That's the actual cloud build and the on-device install — the next action, done once you've confirmed the account and package-name decisions above, not something to run silently in the same pass as a config change.
+
+### Left open — for steps 2 and 3
+
+Once the dev build is installed: background location tracking (a `TaskManager`-registered task, `Location.startLocationUpdatesAsync`, and the plain-language rationale + Android's own "Allow all the time" settings flow, since Android 11+ won't grant background location from the same prompt as foreground) is step 2. Geofencing (`Location.startGeofencingAsync`, safe zones per elderly user, breach detection) is step 3. Neither is touched here — this step is the build capability only.
