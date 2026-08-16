@@ -15,7 +15,11 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -27,7 +31,10 @@
       "//4": "Push notifications need eas.projectId below, from a free Expo account.",
       "//5": "Run `eas init` (needs eas-cli) or create a project at expo.dev, then add:",
       "//6": "  \"eas\": { \"projectId\": \"...\" }",
-      "//7": "Until that exists, registerForPushNotifications() logs a warning and returns null — SOS itself is unaffected, only push delivery."
+      "//7": "Until that exists, registerForPushNotifications() logs a warning and returns null — SOS itself is unaffected, only push delivery.",
+      "eas": {
+        "projectId": "c89864ad-512c-4674-9258-236cb3b560f9"
+      }
     },
     "plugins": [
       "expo-secure-store",
@@ -38,6 +45,7 @@
         }
       ],
       "expo-notifications"
-    ]
+    ],
+    "owner": "sree25"
   }
 }

@@ -623,3 +623,17 @@ Backend, against the running server and the real `eldercare` database, with `bac
 Frontend: `npx expo export --platform android` bundled cleanly, 992 modules (up from 851 — `expo-notifications` and `expo-device`), no unresolved imports.
 
 **Not verified on a device.** Everything above is backend verification plus a bundle check. The push permission prompt, the actual "Acknowledge" action button rendering on a lock screen, and a real device token making a real push notification arrive have not been exercised on a phone — and per this task's framing, that matters more here than on most steps, since a notification path is exactly the kind of thing that can look right in code and still not work on real hardware.
+
+---
+
+## 2026-08-16 — EAS projectId, and Phase 1 verified end to end on real devices
+
+**The blocker from the step-3 entry above is closed.** `registerForPushNotifications()` had been logging a warning and returning `null` because no EAS `projectId` existed. Logged into a new free Expo account (`@sree25`) via `npx eas-cli login`, then `npx eas-cli init` from `frontend/` created and linked the project (`@sree25/eldercare`, id `c89864ad-512c-4674-9258-236cb3b560f9`), writing `extra.eas.projectId` into `app.json` automatically — no hand-editing. `eas init` also added `owner: "sree25"` and two Android location permissions to `app.json` as a side effect of the `expo-location` plugin; neither was asked for but both are correct and harmless.
+
+**Phase 1 is now complete and verified on real devices — all three steps.** Every "not verified on a device" caveat carried by the step-1, step-2, and step-3 entries above is closed:
+
+- SOS button: countdown, confirm-to-cancel, and polling all exercised by actually pressing the button on a phone.
+- GPS: permission prompt, plain-language rationale card, and location capture all confirmed working on-device, not just bundled.
+- Notifications: push delivered end to end through the new EAS project, including the "Acknowledge" action button rendering and working from the lock screen, both as a direct tap and via `getLastNotificationResponseAsync()` on a cold app launch. SMS and voice call attempts against Twilio (not yet configured) and DLT (not yet registered, per the Phase 1 milestone note in `WORK_DIVISION.md` section 8) are correctly recorded in `notifications` as `failed` with the exact missing-configuration reason, rather than silently dropped — the audit trail behaves the same on a real device as it did in the step-3 backend verification.
+
+**`WORK_DIVISION.md` section 6 updated to match** — a new "Emergency core (Phase 1) — complete, verified on real devices" block and a Phase 1 steps table (all three **Done**, owner Sree), in the same style as the existing Phase 0 tables. Section 8's step-by-step breakdown was already correct and needed no change — it describes the plan, not progress, per its own stated split from section 6.

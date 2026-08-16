@@ -196,6 +196,23 @@ Never commit `.env` or any real keys. Use `.env.example` for templates. Run `git
 Three of the six steps are complete. The remaining work is the mobile side: the Expo
 app shell, then the login and registration screens that call the auth endpoints above.
 
+**Emergency core (Phase 1) — complete, verified on real devices**
+- SOS button with a cancellable five-second countdown, the `alerts` row it creates, owner-only cancel and family-eligible resolve, and a family dashboard showing both active alerts and alert history
+- GPS location capture — permission handling with a plain-language explanation before the OS prompt, a location-storage endpoint, and location captured on the alert itself at the moment SOS fires; never a precondition for sending the alert
+- Emergency contact notification fanout in `emergency_contacts.priority` order across push, SMS and voice call, with escalation to the next contact on no acknowledgement, and acknowledgement via a push action button
+- Push delivered end to end on a real device, through a real EAS project (`@sree25/eldercare`); SMS and voice attempts are recorded with a clear failure reason (Twilio not yet configured, and DLT registration still pending for production — see the milestone note under Phase 1 in section 8) rather than silently skipped
+- Alerts never auto-expire — only `cancel` or `resolve` closes one; escalation only adds further notification attempts
+
+### Phase 1 — steps
+
+| Step | Status | Owner |
+|---|---|---|
+| 1. SOS button and alert record | **Done** | Sree |
+| 2. GPS location capture | **Done** | Sree |
+| 3. Emergency contact notification and escalation | **Done** | Sree |
+
+All three steps are built and verified on real devices. See `BUILD_LOG.md` for the per-step decisions and verification detail.
+
 ### What happens after Phase 0
 
 Once Phase 0 is merged into `main`, all three modules run in parallel — Sree starts Phase 1, [Teammate B] starts Phase 2, and [Teammate C] starts Phase 5.
