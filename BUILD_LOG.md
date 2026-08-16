@@ -755,3 +755,20 @@ Foreground first (already built, Phase 1 step 2, reused as-is), then a second ca
 `npx expo config --type prebuild` confirms `expo-file-system`'s config plugin auto-applies during the real build (adds `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, `INTERNET`) with no `app.json` edit needed — checked rather than assumed, same discipline as reading `expo-location`'s plugin source in the step-1 entry above. `npx expo export --platform android` bundles cleanly at 1,005 modules (up from 992 — `expo-file-system` and its transitive deps), no unresolved imports, no circular-import failures despite five new files with real dependencies between them.
 
 **Not yet verified on a device — the dev build this step needs is being kicked off now; see the follow-up entry once it completes.** Permission prompts (both steps), the foreground-service notification actually appearing, a real background delivery while the app is closed, and the offline-queue-and-flush path are exactly the things a bundle check cannot prove.
+
+---
+
+## 2026-08-16 — Follow-up: the dev build for step 2 completed
+
+`eas build --profile development --platform android --non-interactive`, run right after the step-2 commit above. Build `ddfca5cf-e2b2-4926-9f3b-fcdac4636f54`, `development`/`internal`/Android, SDK 54.0.0. Started 21:26:01, finished 21:31:59 — about 6 minutes, no queue wait at the time. Managed credentials: EAS's existing remote Android keystore was reused (`Build Credentials xvQ8M3_gWV`), nothing new to configure. Install link: `https://expo.dev/accounts/sree25/projects/eldercare/builds/ddfca5cf-e2b2-4926-9f3b-fcdac4636f54`.
+
+**One thing worth recording rather than quietly trusting: `eas build:view` reports this build's `Commit` as `67242b3` (the package-name-change commit) instead of `d5a2894` (this step's own commit, HEAD at the moment the build was triggered).** Checked `git log`/`git rev-parse HEAD` immediately after and confirmed `d5a2894` was genuinely HEAD by then — so this looks like a display-metadata timing quirk in `eas-cli`, not evidence that stale code was actually archived and uploaded. Two reasons this is very unlikely to matter in practice, recorded here rather than just asserted:
+
+- **This is a development-client build.** Unlike a production build, the APK doesn't bundle the app's JS at all — a dev client fetches it live from Metro (`npx expo start --dev-client`) every time it connects. Whatever commit the "Commit" field names, the JS actually running on the device will be whatever `npx expo start --dev-client` serves at the moment you connect, i.e. always current.
+- **What *is* baked in natively — permissions, `expo-file-system`/`expo-task-manager`'s native code — comes from `app.json` and `node_modules` as they stood on disk at upload time**, not from git metadata. Both were already correct on disk by the time the build command ran, since `npm install` and the `app.json` edits happened, and were committed, before this build was triggered.
+
+Flagged rather than silently ignored: if anything native (a missing permission, a native module not behaving) looks wrong on-device, this is the first thing to double-check — re-run the build and confirm the `Commit` field matches HEAD that time.
+
+### Not verified by me — needs the phone
+
+Install the APK from the link above, run `npx expo start --dev-client` from `frontend/`, and connect. Specifically worth checking, since none of it can be proven from a bundle export: the two-step permission prompts (foreground, then background — including the Android-version-dependent "Allow all the time" behaviour), the foreground-service notification actually appearing and persisting, a real background location delivery while the app is fully closed (not just backgrounded), the on/off card's states, and that a location taken while offline shows up once connectivity returns.
