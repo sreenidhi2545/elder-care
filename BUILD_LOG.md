@@ -681,6 +681,8 @@ Three build profiles, the standard EAS shape:
 
 **Not run yet: `eas build --profile development --platform android`.** That's the actual cloud build and the on-device install — the next action, done once you've confirmed the account and package-name decisions above, not something to run silently in the same pass as a config change.
 
+**Follow-up, same day: `android.package` changed to `com.eldercare.app`, your call, before the first build.** The initial `com.sree25.eldercare` tied the app id to a personal Expo account name; `com.eldercare.app` doesn't, which matters more once this has a real Play Store listing than it does today. Reconfirmed with `npx expo config --type public` that the resolved manifest picks up the new value. Nothing else in this step changes as a result — `owner`/`extra.eas.projectId` stay on the existing `@sree25/eldercare` EAS project regardless of the Android application id, since the two are unrelated (one identifies the Expo project builds are submitted through, the other is what the installed app is called on the device/store).
+
 ### Left open — for steps 2 and 3
 
 Once the dev build is installed: background location tracking (a `TaskManager`-registered task, `Location.startLocationUpdatesAsync`, and the plain-language rationale + Android's own "Allow all the time" settings flow, since Android 11+ won't grant background location from the same prompt as foreground) is step 2. Geofencing (`Location.startGeofencingAsync`, safe zones per elderly user, breach detection) is step 3. Neither is touched here — this step is the build capability only.
