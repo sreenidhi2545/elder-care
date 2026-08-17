@@ -231,7 +231,11 @@ CREATE TABLE locations (
     is_moving        BOOLEAN,
     source           VARCHAR(20)   NOT NULL DEFAULT 'gps',
     recorded_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
-    created_at       TIMESTAMPTZ   NOT NULL DEFAULT now()
+    created_at       TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    -- One reading per user per GPS timestamp. Backs createLocation's
+    -- ON CONFLICT DO NOTHING, which absorbs the queued-retry duplicates a
+    -- foreground mount/background task resend produces (see BUILD_LOG.md).
+    CONSTRAINT locations_user_recorded_at_key UNIQUE (user_id, recorded_at)
 );
 
 -- The only query this table ever serves: latest positions for one user.

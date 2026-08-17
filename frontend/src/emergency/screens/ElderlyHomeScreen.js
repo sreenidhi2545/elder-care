@@ -129,7 +129,7 @@ export function ElderlyHomeScreen() {
     const location = await captureCurrentLocation();
     if (!location) return;
     try {
-      await recordLocation(location);
+      await recordLocation({ ...location, source: 'foreground_mount' });
       setLocationShared(true);
     } catch {
       // Background enrichment — a failed share here is not something to

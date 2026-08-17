@@ -226,6 +226,16 @@ emergencyRouter.get(
 emergencyRouter.post('/locations', requireAuth, async (req, res) => {
   const location = validateCreateLocationBody(req.body);
   const row = await createLocation(req.user.id, location);
+
+  // row is undefined when ON CONFLICT DO NOTHING silently dropped a duplicate
+  // reading (same user_id + recorded_at, most often a queued retry resending
+  // something already written) — that is a successful no-op, not an error,
+  // so the client's queue must still see a 2xx and drop the item.
+  if (!row) {
+    res.status(200).json({ status: 'ok', location: null, deduplicated: true });
+    return;
+  }
+
   res.status(201).json({ status: 'ok', location: toPublicLocation(row) });
 });
 

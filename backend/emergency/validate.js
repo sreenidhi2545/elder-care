@@ -9,6 +9,11 @@ import { badRequest } from '../shared/http/errors.js';
 
 const ALERT_STATUSES = ['active', 'acknowledged', 'resolved', 'cancelled', 'false_alarm'];
 
+// 'sos_capture' is reserved: nothing writes it yet, since the SOS-press
+// capture goes straight onto alerts.latitude/longitude, not this table. Kept
+// here so validation is ready the moment that changes.
+const LOCATION_SOURCES = ['foreground_mount', 'background_task', 'sos_capture'];
+
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 50;
 
@@ -73,7 +78,7 @@ export function validateSosAlertBody(body = {}) {
 
 /** POST /emergency/locations */
 export function validateCreateLocationBody(body = {}) {
-  const { latitude, longitude, accuracyMeters, batteryLevel, recordedAt } = body;
+  const { latitude, longitude, accuracyMeters, batteryLevel, recordedAt, source } = body;
 
   const errors = [
     ...coordinateErrors(latitude, longitude, { required: true }),
@@ -85,6 +90,8 @@ export function validateCreateLocationBody(body = {}) {
         field: 'batteryLevel', message: 'Battery level must be a whole number between 0 and 100.' },
       { when: recordedAt !== undefined && Number.isNaN(new Date(recordedAt).getTime()),
         field: 'recordedAt', message: 'recordedAt must be a valid date.' },
+      { when: source !== undefined && !LOCATION_SOURCES.includes(source),
+        field: 'source', message: `source must be one of: ${LOCATION_SOURCES.join(', ')}.` },
     ]),
   ];
 
@@ -98,6 +105,7 @@ export function validateCreateLocationBody(body = {}) {
     accuracyMeters: accuracyMeters ?? null,
     batteryLevel: batteryLevel ?? null,
     recordedAt: recordedAt !== undefined ? new Date(recordedAt).toISOString() : null,
+    source: source ?? null,
   };
 }
 

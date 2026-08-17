@@ -47,6 +47,7 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
       accuracyMeters: location.coords.accuracy ?? null,
       batteryLevel: batteryPercent,
       recordedAt: new Date(location.timestamp).toISOString(),
+      source: 'background_task',
     });
   }
 
