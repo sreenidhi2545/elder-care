@@ -73,6 +73,7 @@ async function rawRequest(path, { method = 'GET', body, accessToken } = {}) {
       method,
       headers: {
         Accept: 'application/json',
+        'Bypass-Tunnel-Reminder': '1',
         ...(body ? { 'Content-Type': 'application/json' } : null),
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : null),
       },

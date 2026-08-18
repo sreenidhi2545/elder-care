@@ -12,13 +12,12 @@ import express from 'express';
 import { checkConnection } from './shared/db/pool.js';
 import { ApiError } from './shared/http/errors.js';
 import { authRouter } from './shared/auth/routes.js';
-
+import { caregiverRouter } from './caregiver/routes/index.js';
 export const app = express();
 
 // Trust the proxy hop count in production so req.ip is the real client address
 // and not the load balancer's — that address is stored on every refresh token.
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
-
 app.use(express.json());
 
 /**
@@ -46,6 +45,7 @@ app.get('/health', async (req, res) => {
 });
 
 app.use('/auth', authRouter);
+app.use('/caregiver', caregiverRouter);
 
 // Anything else is not a route yet.
 app.use((req, res) => {
@@ -77,4 +77,9 @@ app.use((err, req, res, next) => {
   // stack traces and driver messages leak internals.
   console.error('Unhandled error:', err);
   res.status(500).json({ status: 'error', code: 'internal_error', error: 'Internal server error' });
+});
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });

@@ -21,9 +21,7 @@
       "favicon": "./assets/favicon.png"
     },
     "extra": {
-      "//": "Add \"apiUrl\": \"http://host:5000\" here to point the app at a specific backend.",
-      "//2": "With no apiUrl key, the app uses the computer running Metro — see src/shared/config.js.",
-      "//3": "Do not set it to null: Expo resolves a null here to {}, which is truthy."
+      "apiUrl": "http://172.20.10.4:5000"
     },
     "plugins": [
       "expo-secure-store"
