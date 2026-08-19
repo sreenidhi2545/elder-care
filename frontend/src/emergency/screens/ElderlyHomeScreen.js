@@ -345,6 +345,17 @@ export function ElderlyHomeScreen({ navigation }) {
               >
                 <Text style={styles.disasterCardText}>📢 Disaster & Weather Alerts</Text>
               </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.responseCenterCardButton,
+                  pressed && styles.responseCenterCardButtonPressed,
+                ]}
+                onPress={() => navigation.navigate('ResponseCenter')}
+                accessibilityRole="button"
+                accessibilityLabel="24 7 emergency response center"
+              >
+                <Text style={styles.responseCenterCardText}>📞 24/7 Emergency Response Center</Text>
+              </Pressable>
               <LocationSharingCard
                 permission={locationPermission}
                 shared={locationShared}
@@ -625,6 +636,26 @@ const styles = StyleSheet.create({
   },
   disasterCardText: {
     color: colors.primary,
+    fontSize: type.body,
+    fontWeight: '800',
+  },
+  responseCenterCardButton: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1.5,
+    borderColor: colors.success,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  responseCenterCardButtonPressed: {
+    backgroundColor: '#DCFCE7',
+  },
+  responseCenterCardText: {
+    color: colors.success,
     fontSize: type.body,
     fontWeight: '800',
   },

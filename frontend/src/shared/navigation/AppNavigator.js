@@ -14,6 +14,7 @@ import { AmbulanceBookingScreen } from '../../emergency/screens/AmbulanceBooking
 import { AmbulanceStatusScreen } from '../../emergency/screens/AmbulanceStatusScreen';
 import { DisasterAlertsScreen } from '../../emergency/screens/DisasterAlertsScreen';
 import { DisasterDetailScreen } from '../../emergency/screens/DisasterDetailScreen';
+import { ResponseCenterScreen } from '../../emergency/screens/ResponseCenterScreen';
 import { useAuth } from '../auth/AuthContext';
 import { AdminHomeScreen } from '../screens/AdminHomeScreen';
 
@@ -29,6 +30,7 @@ function ElderlyNavigator() {
       <Stack.Screen name="AmbulanceStatus" component={AmbulanceStatusScreen} />
       <Stack.Screen name="DisasterAlerts" component={DisasterAlertsScreen} />
       <Stack.Screen name="DisasterDetail" component={DisasterDetailScreen} />
+      <Stack.Screen name="ResponseCenter" component={ResponseCenterScreen} />
     </Stack.Navigator>
   );
 }
@@ -41,6 +43,7 @@ function FamilyNavigator() {
       <Stack.Screen name="AmbulanceStatus" component={AmbulanceStatusScreen} />
       <Stack.Screen name="DisasterAlerts" component={DisasterAlertsScreen} />
       <Stack.Screen name="DisasterDetail" component={DisasterDetailScreen} />
+      <Stack.Screen name="ResponseCenter" component={ResponseCenterScreen} />
     </Stack.Navigator>
   );
 }
