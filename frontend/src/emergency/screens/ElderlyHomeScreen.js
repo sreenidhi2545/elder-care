@@ -48,7 +48,7 @@ const POLL_IDLE_MS = 20_000;
 // settled (a reading or null), so awaiting it in fireSos adds no wait.
 const SOS_LOCATION_TIMEOUT_MS = 4500;
 
-export function ElderlyHomeScreen() {
+export function ElderlyHomeScreen({ navigation }) {
   const { user, signOut } = useAuth();
 
   // 'checking' | 'idle' | 'confirming' | 'sending' | 'active' | 'confirmingCancel' | 'cancelling'
@@ -323,6 +323,17 @@ export function ElderlyHomeScreen() {
               </Pressable>
               <Text style={styles.helpText}>Press for help</Text>
               <Text style={styles.subText}>You'll have 5 seconds to cancel before it sends.</Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.ambulanceCardButton,
+                  pressed && styles.ambulanceCardButtonPressed,
+                ]}
+                onPress={() => navigation.navigate('AmbulanceBooking')}
+                accessibilityRole="button"
+                accessibilityLabel="Request emergency ambulance"
+              >
+                <Text style={styles.ambulanceCardText}>🚑 Request Emergency Ambulance</Text>
+              </Pressable>
               <LocationSharingCard
                 permission={locationPermission}
                 shared={locationShared}
@@ -566,6 +577,26 @@ const styles = StyleSheet.create({
   sosButtonText: { fontSize: 56, fontWeight: '800', color: colors.surface, letterSpacing: 2 },
   helpText: { fontSize: type.heading, fontWeight: '700', color: colors.text },
   subText: { fontSize: type.body, color: colors.textMuted, textAlign: 'center', maxWidth: 280 },
+  ambulanceCardButton: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1.5,
+    borderColor: colors.danger,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ambulanceCardButtonPressed: {
+    backgroundColor: '#FECACA',
+  },
+  ambulanceCardText: {
+    color: colors.danger,
+    fontSize: type.body,
+    fontWeight: '800',
+  },
 
   locationCard: {
     backgroundColor: colors.surface,

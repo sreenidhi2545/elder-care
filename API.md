@@ -133,6 +133,11 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `GET` | `/emergency/family/alerts/history` | Bearer + `family` | Resolved/cancelled alerts from the last 7 days, same linked users |
 | `POST` | `/emergency/locations` | Bearer | Record one GPS reading |
 | `POST` | `/emergency/device-tokens` | Bearer | Register this device for push notifications |
+| `POST` | `/emergency/ambulance/bookings` | Bearer | Request an emergency ambulance |
+| `GET` | `/emergency/ambulance/bookings/active` | Bearer | Get current active ambulance booking |
+| `GET` | `/emergency/ambulance/bookings/:id` | Bearer | Get details of a specific ambulance booking |
+| `GET` | `/emergency/ambulance/bookings` | Bearer | List ambulance booking history |
+| `POST` | `/emergency/ambulance/bookings/:id/cancel` | Bearer | Cancel an active ambulance booking |
 
 ---
 
@@ -797,6 +802,80 @@ await signIn(response);
 **Errors** come back as `ApiError` with `.status`, `.code` and `.details`, or `NetworkError` when the request never arrived. Branch on `.code`: `invalid_credentials`, `account_exists`, `account_disabled`, `role_not_self_assignable`, `validation_failed`. On `validation_failed`, `.details` lists every bad field at once — show each message against its own input.
 
 **Roles the form may offer:** `elderly`, `family`, `caregiver`. Not `admin` — the server rejects it with `403 role_not_self_assignable`.
+
+---
+
+---
+
+## Ambulance Bookings (Phase 5)
+
+### `POST /emergency/ambulance/bookings`
+
+Requests an emergency ambulance for the authenticated user. Automatically dispatches the mock provider service layer.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+**Request Body:**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `pickupAddress` | string | **yes** | Pickup address or location description |
+| `destinationHospital` | string | **yes** | Target hospital name |
+| `pickupLatitude` | number | no | Optional GPS latitude |
+| `pickupLongitude` | number | no | Optional GPS longitude |
+| `notes` | string | no | Optional medical or access instructions |
+
+```json
+{
+  "pickupAddress": "123 Main Street, Apt 4B",
+  "destinationHospital": "City General Hospital",
+  "notes": "Wheelchair required, difficulty breathing"
+}
+```
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "booking": {
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "userId": "cc7e3c0f-640b-4a56-ad9c-ea100d4ce851",
+    "pickupAddress": "123 Main Street, Apt 4B",
+    "destinationHospital": "City General Hospital",
+    "status": "dispatched",
+    "providerName": "ElderCare Emergency Fleet (Mock)",
+    "providerReference": "MOCK-AMB-48192",
+    "driverName": "Rajesh Kumar",
+    "driverPhone": "+919876543210",
+    "vehicleNumber": "KA-01-EQ-9911",
+    "etaMinutes": 8,
+    "notes": "Wheelchair required, difficulty breathing",
+    "requestedAt": "2026-08-19T22:40:00.000Z",
+    "dispatchedAt": "2026-08-19T22:40:00.100Z"
+  }
+}
+```
+
+**Errors:**
+- `400 validation_failed` - Missing pickup location or destination hospital
+- `409 active_booking_exists` - User already has an active ambulance booking
+
+---
+
+### `GET /emergency/ambulance/bookings/active`
+
+Returns the currently active ambulance booking for the authenticated user (`requested`, `dispatched`, `en_route`, `arrived`), or `booking: null` if none exists.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+---
+
+### `POST /emergency/ambulance/bookings/:id/cancel`
+
+Cancels an active ambulance booking.
+
+**Headers:** `Authorization: Bearer <accessToken>`
 
 ---
 
