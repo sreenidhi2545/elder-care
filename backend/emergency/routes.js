@@ -35,6 +35,7 @@ import { createLocation, toPublicLocation } from './locations.js';
 import { registerDeviceToken } from './deviceTokens.js';
 import { advanceFanout } from './notifications/fanout.js';
 import { ambulanceRouter } from './ambulance/routes.js';
+import { disasterRouter } from './disaster/routes.js';
 import {
   validateListQuery,
   validateCloseAlertBody,
@@ -47,6 +48,7 @@ import {
 export const emergencyRouter = Router();
 
 emergencyRouter.use('/ambulance', ambulanceRouter);
+emergencyRouter.use('/disaster-alerts', disasterRouter);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

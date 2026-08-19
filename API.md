@@ -138,6 +138,8 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `GET` | `/emergency/ambulance/bookings/:id` | Bearer | Get details of a specific ambulance booking |
 | `GET` | `/emergency/ambulance/bookings` | Bearer | List ambulance booking history |
 | `POST` | `/emergency/ambulance/bookings/:id/cancel` | Bearer | Cancel an active ambulance booking |
+| `GET` | `/emergency/disaster-alerts` | Bearer | List active disaster alerts & weather warnings |
+| `GET` | `/emergency/disaster-alerts/:id` | Bearer | Get details for a specific disaster alert |
 
 ---
 
@@ -876,6 +878,78 @@ Returns the currently active ambulance booking for the authenticated user (`requ
 Cancels an active ambulance booking.
 
 **Headers:** `Authorization: Bearer <accessToken>`
+
+---
+
+## Disaster Alerts (Phase 5)
+
+### `GET /emergency/disaster-alerts`
+
+Returns current active disaster warnings and weather advisories for the user's region.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `area` | string | no | Optional filter by area name (e.g. `Hyderabad`) |
+| `limit` | number | no | Max records to return (default 20, max 100) |
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "count": 2,
+  "alerts": [
+    {
+      "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+      "title": "Severe Flood Warning",
+      "description": "Heavy rainfall has led to severe waterlogging and flash flood risks in low-lying areas. Stay indoors, avoid underpasses, and move to higher ground if instructed.",
+      "disasterType": "flood",
+      "severity": "critical",
+      "areaName": "Hyderabad Central",
+      "centerLatitude": null,
+      "centerLongitude": null,
+      "radiusMeters": null,
+      "source": "IMD / Disaster Relief Feed (Mock)",
+      "externalId": "MOCK-DIS-001",
+      "issuedAt": "2026-08-19T23:00:00.000Z",
+      "expiresAt": "2026-08-20T23:00:00.000Z",
+      "isActive": true,
+      "createdAt": "2026-08-19T23:00:00.000Z",
+      "updatedAt": "2026-08-19T23:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /emergency/disaster-alerts/:id`
+
+Returns detailed information for a specific disaster warning.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "alert": {
+    "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+    "title": "Severe Flood Warning",
+    "description": "Heavy rainfall has led to severe waterlogging and flash flood risks in low-lying areas.",
+    "disasterType": "flood",
+    "severity": "critical",
+    "areaName": "Hyderabad Central",
+    "source": "IMD / Disaster Relief Feed (Mock)",
+    "issuedAt": "2026-08-19T23:00:00.000Z"
+  }
+}
+```
 
 ---
 
