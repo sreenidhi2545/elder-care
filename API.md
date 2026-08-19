@@ -140,6 +140,7 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `POST` | `/emergency/ambulance/bookings/:id/cancel` | Bearer | Cancel an active ambulance booking |
 | `GET` | `/emergency/disaster-alerts` | Bearer | List active disaster alerts & weather warnings |
 | `GET` | `/emergency/disaster-alerts/:id` | Bearer | Get details for a specific disaster alert |
+| `POST` | `/emergency/alerts/fall` | Bearer | Trigger manual fall emergency alert |
 
 ---
 
@@ -950,6 +951,54 @@ Returns detailed information for a specific disaster warning.
   }
 }
 ```
+
+---
+
+## Manual Fall Alerts (Phase 5)
+
+### `POST /emergency/alerts/fall`
+
+Triggers a manual fall alert (`alert_type: 'fall'`) for the authenticated user. Automatically invokes emergency contact notification fanout (`advanceFanout`).
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `latitude` | number | no | Optional GPS latitude |
+| `longitude` | number | no | Optional GPS longitude |
+| `message` | string | no | Optional alert note |
+
+```json
+{
+  "latitude": 17.385044,
+  "longitude": 78.486671,
+  "message": "User reported a fall in the living room"
+}
+```
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "alert": {
+    "id": "c3d4e5f6-a7b8-9012-cdef-345678901234",
+    "userId": "cc7e3c0f-640b-4a56-ad9c-ea100d4ce851",
+    "alertType": "fall",
+    "status": "active",
+    "severity": "high",
+    "latitude": 17.385044,
+    "longitude": 78.486671,
+    "message": "User reported a fall in the living room",
+    "triggeredAt": "2026-08-20T00:05:00.000Z"
+  }
+}
+```
+
+**Errors:**
+- `409 fall_already_active` - User already has an active fall alert
 
 ---
 

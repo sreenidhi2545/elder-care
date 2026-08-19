@@ -356,6 +356,17 @@ export function ElderlyHomeScreen({ navigation }) {
               >
                 <Text style={styles.responseCenterCardText}>📞 24/7 Emergency Response Center</Text>
               </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.fallCardButton,
+                  pressed && styles.fallCardButtonPressed,
+                ]}
+                onPress={() => navigation.navigate('FallDetection')}
+                accessibilityRole="button"
+                accessibilityLabel="Manual fall detection trigger"
+              >
+                <Text style={styles.fallCardText}>🍂 Fall Detection ("I Fell")</Text>
+              </Pressable>
               <LocationSharingCard
                 permission={locationPermission}
                 shared={locationShared}
@@ -656,6 +667,26 @@ const styles = StyleSheet.create({
   },
   responseCenterCardText: {
     color: colors.success,
+    fontSize: type.body,
+    fontWeight: '800',
+  },
+  fallCardButton: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1.5,
+    borderColor: '#D97706',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fallCardButtonPressed: {
+    backgroundColor: '#FEF3C7',
+  },
+  fallCardText: {
+    color: '#D97706',
     fontSize: type.body,
     fontWeight: '800',
   },
