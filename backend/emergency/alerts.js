@@ -72,6 +72,36 @@ export async function createSosAlert(userId, location) {
   return rows[0];
 }
 
+/** The caller's own currently-active fall alert, if there is one. */
+export async function findActiveFallAlert(userId) {
+  const { rows } = await query(
+    `SELECT * FROM alerts
+      WHERE user_id = $1 AND alert_type = 'fall' AND status = 'active'
+      ORDER BY triggered_at DESC
+      LIMIT 1`,
+    [userId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Creates a new manual Fall Alert ('fall').
+ */
+export async function createFallAlert(userId, location, message) {
+  const { rows } = await query(
+    `INSERT INTO alerts (user_id, alert_type, status, severity, message, triggered_at, latitude, longitude)
+     VALUES ($1, 'fall', 'active', 'high', $2, now(), $3, $4)
+     RETURNING *`,
+    [
+      userId,
+      message || 'Fall alert: user reported that they have fallen and may need assistance.',
+      location?.latitude ?? null,
+      location?.longitude ?? null,
+    ]
+  );
+  return rows[0];
+}
+
 /** The caller's own alerts, newest first. */
 export async function listAlertsForUser(userId, { status, limit }) {
   if (status) {

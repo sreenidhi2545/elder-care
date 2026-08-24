@@ -133,6 +133,14 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `GET` | `/emergency/family/alerts/history` | Bearer + `family` | Resolved/cancelled alerts from the last 7 days, same linked users |
 | `POST` | `/emergency/locations` | Bearer | Record one GPS reading |
 | `POST` | `/emergency/device-tokens` | Bearer | Register this device for push notifications |
+| `POST` | `/emergency/ambulance/bookings` | Bearer | Request an emergency ambulance |
+| `GET` | `/emergency/ambulance/bookings/active` | Bearer | Get current active ambulance booking |
+| `GET` | `/emergency/ambulance/bookings/:id` | Bearer | Get details of a specific ambulance booking |
+| `GET` | `/emergency/ambulance/bookings` | Bearer | List ambulance booking history |
+| `POST` | `/emergency/ambulance/bookings/:id/cancel` | Bearer | Cancel an active ambulance booking |
+| `GET` | `/emergency/disaster-alerts` | Bearer | List active disaster alerts & weather warnings |
+| `GET` | `/emergency/disaster-alerts/:id` | Bearer | Get details for a specific disaster alert |
+| `POST` | `/emergency/alerts/fall` | Bearer | Trigger manual fall emergency alert |
 
 ---
 
@@ -797,6 +805,200 @@ await signIn(response);
 **Errors** come back as `ApiError` with `.status`, `.code` and `.details`, or `NetworkError` when the request never arrived. Branch on `.code`: `invalid_credentials`, `account_exists`, `account_disabled`, `role_not_self_assignable`, `validation_failed`. On `validation_failed`, `.details` lists every bad field at once — show each message against its own input.
 
 **Roles the form may offer:** `elderly`, `family`, `caregiver`. Not `admin` — the server rejects it with `403 role_not_self_assignable`.
+
+---
+
+---
+
+## Ambulance Bookings (Phase 5)
+
+### `POST /emergency/ambulance/bookings`
+
+Requests an emergency ambulance for the authenticated user. Automatically dispatches the mock provider service layer.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+**Request Body:**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `pickupAddress` | string | **yes** | Pickup address or location description |
+| `destinationHospital` | string | **yes** | Target hospital name |
+| `pickupLatitude` | number | no | Optional GPS latitude |
+| `pickupLongitude` | number | no | Optional GPS longitude |
+| `notes` | string | no | Optional medical or access instructions |
+
+```json
+{
+  "pickupAddress": "123 Main Street, Apt 4B",
+  "destinationHospital": "City General Hospital",
+  "notes": "Wheelchair required, difficulty breathing"
+}
+```
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "booking": {
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "userId": "cc7e3c0f-640b-4a56-ad9c-ea100d4ce851",
+    "pickupAddress": "123 Main Street, Apt 4B",
+    "destinationHospital": "City General Hospital",
+    "status": "dispatched",
+    "providerName": "ElderCare Emergency Fleet (Mock)",
+    "providerReference": "MOCK-AMB-48192",
+    "driverName": "Rajesh Kumar",
+    "driverPhone": "+919876543210",
+    "vehicleNumber": "KA-01-EQ-9911",
+    "etaMinutes": 8,
+    "notes": "Wheelchair required, difficulty breathing",
+    "requestedAt": "2026-08-19T22:40:00.000Z",
+    "dispatchedAt": "2026-08-19T22:40:00.100Z"
+  }
+}
+```
+
+**Errors:**
+- `400 validation_failed` - Missing pickup location or destination hospital
+- `409 active_booking_exists` - User already has an active ambulance booking
+
+---
+
+### `GET /emergency/ambulance/bookings/active`
+
+Returns the currently active ambulance booking for the authenticated user (`requested`, `dispatched`, `en_route`, `arrived`), or `booking: null` if none exists.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+---
+
+### `POST /emergency/ambulance/bookings/:id/cancel`
+
+Cancels an active ambulance booking.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+---
+
+## Disaster Alerts (Phase 5)
+
+### `GET /emergency/disaster-alerts`
+
+Returns current active disaster warnings and weather advisories for the user's region.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `area` | string | no | Optional filter by area name (e.g. `Hyderabad`) |
+| `limit` | number | no | Max records to return (default 20, max 100) |
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "count": 2,
+  "alerts": [
+    {
+      "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+      "title": "Severe Flood Warning",
+      "description": "Heavy rainfall has led to severe waterlogging and flash flood risks in low-lying areas. Stay indoors, avoid underpasses, and move to higher ground if instructed.",
+      "disasterType": "flood",
+      "severity": "critical",
+      "areaName": "Hyderabad Central",
+      "centerLatitude": null,
+      "centerLongitude": null,
+      "radiusMeters": null,
+      "source": "IMD / Disaster Relief Feed (Mock)",
+      "externalId": "MOCK-DIS-001",
+      "issuedAt": "2026-08-19T23:00:00.000Z",
+      "expiresAt": "2026-08-20T23:00:00.000Z",
+      "isActive": true,
+      "createdAt": "2026-08-19T23:00:00.000Z",
+      "updatedAt": "2026-08-19T23:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /emergency/disaster-alerts/:id`
+
+Returns detailed information for a specific disaster warning.
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "alert": {
+    "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+    "title": "Severe Flood Warning",
+    "description": "Heavy rainfall has led to severe waterlogging and flash flood risks in low-lying areas.",
+    "disasterType": "flood",
+    "severity": "critical",
+    "areaName": "Hyderabad Central",
+    "source": "IMD / Disaster Relief Feed (Mock)",
+    "issuedAt": "2026-08-19T23:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Manual Fall Alerts (Phase 5)
+
+### `POST /emergency/alerts/fall`
+
+Triggers a manual fall alert (`alert_type: 'fall'`) for the authenticated user. Automatically invokes emergency contact notification fanout (`advanceFanout`).
+
+**Headers:** `Authorization: Bearer <accessToken>`
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `latitude` | number | no | Optional GPS latitude |
+| `longitude` | number | no | Optional GPS longitude |
+| `message` | string | no | Optional alert note |
+
+```json
+{
+  "latitude": 17.385044,
+  "longitude": 78.486671,
+  "message": "User reported a fall in the living room"
+}
+```
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "alert": {
+    "id": "c3d4e5f6-a7b8-9012-cdef-345678901234",
+    "userId": "cc7e3c0f-640b-4a56-ad9c-ea100d4ce851",
+    "alertType": "fall",
+    "status": "active",
+    "severity": "high",
+    "latitude": 17.385044,
+    "longitude": 78.486671,
+    "message": "User reported a fall in the living room",
+    "triggeredAt": "2026-08-20T00:05:00.000Z"
+  }
+}
+```
+
+**Errors:**
+- `409 fall_already_active` - User already has an active fall alert
 
 ---
 

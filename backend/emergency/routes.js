@@ -22,6 +22,8 @@ import {
   toPublicAlert,
   findActiveSosAlert,
   createSosAlert,
+  findActiveFallAlert,
+  createFallAlert,
   listAlertsForUser,
   findAlertById,
   cancelAlert,
@@ -34,6 +36,8 @@ import {
 import { createLocation, toPublicLocation } from './locations.js';
 import { registerDeviceToken } from './deviceTokens.js';
 import { advanceFanout } from './notifications/fanout.js';
+import { ambulanceRouter } from './ambulance/routes.js';
+import { disasterRouter } from './disaster/routes.js';
 import {
   validateListQuery,
   validateCloseAlertBody,
@@ -44,6 +48,9 @@ import {
 } from './validate.js';
 
 export const emergencyRouter = Router();
+
+emergencyRouter.use('/ambulance', ambulanceRouter);
+emergencyRouter.use('/disaster-alerts', disasterRouter);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -88,6 +95,39 @@ emergencyRouter.post('/alerts', requireAuth, async (req, res) => {
 
   res.status(201).json({ status: 'ok', alert: toPublicAlert(alert) });
 });
+
+// ---------------------------------------------------------------------------
+// POST /emergency/alerts/fall (and POST /emergency/fall)
+// ---------------------------------------------------------------------------
+const handleFallAlert = async (req, res) => {
+  let location = null;
+  let message = null;
+
+  if (req.body && typeof req.body === 'object') {
+    location = validateSosAlertBody(req.body);
+    if (typeof req.body.message === 'string' && req.body.message.trim()) {
+      message = req.body.message.trim();
+    }
+  }
+
+  const existing = await findActiveFallAlert(req.user.id);
+  if (existing) {
+    throw conflict('fall_already_active', 'A fall alert is already active for this account.', {
+      alert: toPublicAlert(existing),
+    });
+  }
+
+  const alert = await createFallAlert(req.user.id, location, message);
+
+  advanceFanout(alert.id).catch((err) =>
+    console.error(`Initial fanout failed for fall alert ${alert.id}:`, err)
+  );
+
+  res.status(201).json({ status: 'ok', alert: toPublicAlert(alert) });
+};
+
+emergencyRouter.post('/alerts/fall', requireAuth, handleFallAlert);
+emergencyRouter.post('/fall', requireAuth, handleFallAlert);
 
 // ---------------------------------------------------------------------------
 // GET /emergency/alerts

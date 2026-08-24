@@ -25,18 +25,7 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "//": "Add \"apiUrl\": \"http://host:5000\" here to point the app at a specific backend.",
-      "//2": "With no apiUrl key, the app uses the computer running Metro — see src/shared/config.js.",
-      "//3": "Do not set it to null: Expo resolves a null here to {}, which is truthy.",
-      "//4": "Push notifications need eas.projectId below, from a free Expo account.",
-      "//5": "Run `eas init` (needs eas-cli) or create a project at expo.dev, then add:",
-      "//6": "  \"eas\": { \"projectId\": \"...\" }",
-      "//7": "Until that exists, registerForPushNotifications() logs a warning and returns null — SOS itself is unaffected, only push delivery.",
-      "eas": {
-        "projectId": "c89864ad-512c-4674-9258-236cb3b560f9"
-      }
-    },
+    "extra": {},
     "plugins": [
       "expo-secure-store",
       [
@@ -48,7 +37,6 @@
         }
       ],
       "expo-notifications"
-    ],
-    "owner": "sree25"
+    ]
   }
 }

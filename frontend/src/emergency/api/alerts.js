@@ -28,6 +28,22 @@ export function createSosAlert(location) {
 }
 
 /**
+ * POST /emergency/alerts/fall — triggers a manual fall alert for the signed-in user.
+ * @param {{ latitude: number, longitude: number } | null} [location]
+ * @param {string} [message]
+ */
+export function createFallAlert(location, message) {
+  return apiRequest('/emergency/alerts/fall', {
+    method: 'POST',
+    body: {
+      latitude: location?.latitude ?? null,
+      longitude: location?.longitude ?? null,
+      message: message || undefined,
+    },
+  });
+}
+
+/**
  * GET /emergency/alerts — the caller's own alerts, newest first.
  * @param {object} [options]
  * @param {string} [options.status] filter, e.g. 'active'
