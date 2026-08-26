@@ -916,3 +916,38 @@ Flagged in three places on purpose, not just one, so it can't be missed by only 
 ### Not yet run
 
 No preview build has been produced against this specific fix yet. Once one is, it needs a real device test confirming the app can reach the backend end to end — the thing that's been assumed working, then disproven, twice in this same investigation, so it isn't getting called done again without a device actually confirming it this time.
+
+---
+
+## 2026-08-26 — Follow-up: `usesCleartextTraffic` was set in the wrong place, never reached the manifest
+
+Preview build `aa8582c0` (commit `236a59cc`, built with the `usesCleartextTraffic` fix from the entry above) still failed with "unable to connect." Rather than assume the fix from the previous entry actually landed, it was checked directly, the same way the URL bug was — download the built APK, don't trust the source alone.
+
+**The bundle was clean.** `assets/index.android.bundle` inside `aa8582c0`'s APK contains `http://10.255.240.141:5000` verbatim, exactly once; the stale `192.168.0.108` is gone entirely; `EXPO_PUBLIC_API_URL` as a bare name is absent, same successful-substitution signature confirmed for the entry above. `git show 236a59cc:frontend/app.config.js` confirmed `usesCleartextTraffic: true` was genuinely present in the exact commit this build used.
+
+**The manifest was not.** `AndroidManifest.xml` inside the same APK, scanned for `usesCleartextTraffic`, `networkSecurityConfig`: **absent, both**. The flag set in `app.config.js` never reached the compiled manifest at all.
+
+**Root cause: `android.usesCleartextTraffic` set as a bare top-level key is not a real Expo config field.** It only takes effect through the `expo-build-properties` config plugin — a bare `android.usesCleartextTraffic: true` directly on the config, which is what the previous entry's fix did, is silently ignored by Expo's prebuild with no warning. Corroborating evidence sitting in the same build's own log, `PREBUILD` phase — Expo *does* warn about exactly this category of mistake for a different field:
+```
+» android: userInterfaceStyle: Install expo-system-ui in your project to enable this feature.
+```
+No equivalent warning fired for `usesCleartextTraffic` — it isn't a recognized key at all outside the plugin, so prebuild had nothing to warn about; it just dropped it.
+
+Also checked, since the user asked directly: whether "unable to connect" (`LoginScreen.js`'s wording for `err.name === 'NetworkError'`) could be masking a non-network failure — a JSON parse error or a CORS rejection. Neither applies: `client.js`'s `safeParse()` catches `JSON.parse` failures internally and never throws, and CORS is a browser-only concept `fetch` in React Native doesn't enforce. Confirmed a genuine `fetch()`-level rejection, consistent with Android's network stack refusing the plain-HTTP connection before it leaves the device — the same failure shape as before, because it was the same underlying cause, not yet actually fixed.
+
+### Fix — `expo-build-properties` installed, `usesCleartextTraffic` moved into its `plugins` entry
+
+`npx expo install expo-build-properties` (matches SDK 54, same convention as every other native module in this project). `app.config.js`: removed the no-op bare `android.usesCleartextTraffic` key; added
+```js
+[
+  'expo-build-properties',
+  { android: { usesCleartextTraffic: true } },
+],
+```
+to the `plugins` array. Verified against Expo's own tooling, not just re-read as source: `npx expo config --type introspect` now shows `'android:usesCleartextTraffic': 'true'` in the resolved native manifest attributes — this simulates the real prebuild mods pipeline, so it's the closest confirmation short of another full build-and-download cycle that the attribute will actually land this time.
+
+**Same production warning, same three places, updated to point at the real mechanism.** The comment now sits on the `expo-build-properties` plugin entry rather than a bare key (`app.config.js`), `SETUP.md`'s preview-build section (section 10) now says "via the `expo-build-properties` plugin" rather than describing a bare key, and this entry. All three still say the same thing: this must not reach a production build, and now they also say why the mechanism matters — a bare key looking right in the source is not the same as it actually reaching the manifest, which is exactly what went wrong here.
+
+### Not yet run
+
+No preview build has been produced against this fix yet. Given the last two entries in this log each assumed a fix worked and were wrong, the next build needs a real download-and-inspect check of its APK (bundle URL, manifest attribute) before calling it done, not just a device test — the device test alone is what looked like success right up until "unable to connect" showed up anyway.
