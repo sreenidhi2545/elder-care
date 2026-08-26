@@ -36,9 +36,9 @@ export async function registerForPushNotifications() {
 
   const projectId = Constants.expoConfig?.extra?.eas?.projectId;
   if (!projectId) {
-    // Expected until `eas init` has been run once — see app.json's "extra"
-    // comments. Not an error: the rest of the app works without it.
-    console.warn('No EAS projectId configured — skipping push registration. See app.json.');
+    // Expected until `eas init` has been run once — see app.config.js's
+    // "extra" comment. Not an error: the rest of the app works without it.
+    console.warn('No EAS projectId configured — skipping push registration. See app.config.js.');
     return null;
   }
 
