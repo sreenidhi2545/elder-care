@@ -882,3 +882,37 @@ A fresh Windows install changed the laptop's IP from `192.168.0.107` to `192.168
 ### Not yet run
 
 The `eas env:create` command itself was left for the user to run with their own current IP, same reasoning as the `ALTER TABLE` in the entry above — a build-affecting external action, not something to execute unasked. No preview build has been produced against this fix yet; the 44%-NULL SOS location work from the entry above and this network fix both need one real preview build, installed on a phone on the current network, to confirm end to end.
+
+---
+
+## 2026-08-26 — Follow-up: the fix above still didn't reach the backend. Real cause was Android cleartext policy, not the URL.
+
+Preview build `0984abb4` (commit `df7eef6`), built after the entry above, installed and still couldn't reach the backend, even with `eas env:list` confirming `EXPO_PUBLIC_API_URL` set correctly and the phone's own browser loading `http://192.168.0.108:5000/health` fine. Rather than guess again, every part of the previous fix was checked against live evidence before looking elsewhere.
+
+**Pulled the actual EAS build log for `0984abb4`, not just its status.** `eas-cli build:view` needs the full UUID, not the short id shown in the CLI output (`0984abb4-b82b-4836-8fe1-ae3b6ddbff96`, found via `eas-cli build:list --json`). The signed log URL GCS returns serves the log **brotli-compressed** (`Content-Encoding: br`) — a plain `curl` without `--compressed` silently saves the compressed bytes as garbage rather than erroring, which looked like a corrupted download at first. Decoded with Node's `zlib.brotliDecompressSync` instead, revealing Bunyan-style NDJSON build logs.
+
+**Confirmed, from that log, that every part of the previous fix worked exactly as designed:**
+- `SPIN_UP_BUILDER` phase printed `EXPO_PUBLIC_API_URL=http://192.168.0.108:5000` under "Project environment variables," alongside `EAS_BUILD=true` and `EAS_BUILD_PROFILE=preview` — the EAS environment variable reached the build worker correctly.
+- `EAGER_BUNDLE` phase ran a real Metro bundle (`Bundled 11039ms index.js (1015 modules)`), not a cache hit.
+- `app.config.js`'s build-time guard correctly did **not** throw — its condition matches the exact env var names the log shows were present, so it was right not to fire.
+
+**Not satisfied with log evidence alone, downloaded the actual installed APK and inspected the shipped JS bundle directly** (`assets/index.android.bundle` inside the `.apk`, a zip). `http://192.168.0.108:5000` appears verbatim, exactly once; the bare name `EXPO_PUBLIC_API_URL` appears zero times — proof Babel's `EXPO_PUBLIC_*` substitution actually ran and replaced the reference with the correct literal, not just that the env var existed somewhere upstream. `resolveApiUrl()`'s plain `process.env.EXPO_PUBLIC_API_URL` read (not destructured, not dynamically keyed) was the suspected weak point and turned out fully correct.
+
+**So the client was resolving and sending requests to the exactly correct URL. The request still never left the phone.** Checked `AndroidManifest.xml` inside the built APK directly (binary AXML, scanned for the relevant attribute/string names rather than assumed): neither `android:usesCleartextTraffic` nor a `networkSecurityConfig` reference exists anywhere in it, and no `res/xml/network_security_config.xml` resource is packaged. Neither `app.config.js` nor any plugin in this project sets either. **Android blocks all plain `http://` traffic app-wide by default for any app targeting API 28+ (Android 9), which every current Expo SDK 54 build does, unless the manifest explicitly opts back in.** `http://192.168.0.108:5000` is exactly the kind of request this blocks — indistinguishable, from `apiRequest`'s catch block, from any other "could not reach the server" failure.
+
+**Why the phone's own browser test didn't catch this:** the cleartext policy is declared per-app, in that app's own manifest. The browser is a separate installed app with its own — unrestricted for direct HTTP navigation. The browser test was genuinely valid evidence for network/firewall/server reachability (which is why layers 2 and 3 from the entry above really were clean), it just could never have validated this app's own traffic policy.
+
+**Why this never surfaced before now:** every prior preview build resolved to `localhost:5000` (the bug the entry above fixed) — the request was already going nowhere for a different reason before this layer was ever exercised. This build is the first one to get the URL right, which is exactly what exposed the layer underneath it.
+
+### Fix — `android.usesCleartextTraffic: true` in `app.config.js`
+
+**Deliberately marked temporary, with a comment at the point of use, and this entry.** `usesCleartextTraffic: true` is coarse — it allows plain HTTP for the whole app, not just requests to the local dev backend — which is acceptable only because this is a local-dev preview build talking to a LAN IP over `http://`. **This must not reach a production build.** Before one:
+
+- Replace it with a `network_security_config.xml` (`android.networkSecurityConfig` in `app.config.js`) scoped to private/local IP ranges only, so cleartext stays possible for local dev without opening it up app-wide, **or**
+- Drop the flag entirely once the backend is reachable over `https://`, which a real production deployment should be regardless.
+
+Flagged in three places on purpose, not just one, so it can't be missed by only reading one of them: the `app.config.js` comment at the flag itself, this `BUILD_LOG.md` entry, and `SETUP.md`'s preview-build section (section 10) — a `⚠️` callout there points back here.
+
+### Not yet run
+
+No preview build has been produced against this specific fix yet. Once one is, it needs a real device test confirming the app can reach the backend end to end — the thing that's been assumed working, then disproven, twice in this same investigation, so it isn't getting called done again without a device actually confirming it this time.

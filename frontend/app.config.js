@@ -45,6 +45,18 @@ module.exports = {
     },
     android: {
       package: 'com.eldercare.app',
+      // TEMPORARY — local-dev-only, coarse, and must not reach a production
+      // build. Without this, Android blocks all plain http:// requests
+      // app-wide by default (targetSdkVersion 28+), which is what broke the
+      // preview build even after EXPO_PUBLIC_API_URL resolved correctly —
+      // see BUILD_LOG.md, 2026-08-26. EXPO_PUBLIC_API_URL is a LAN IP over
+      // http:// during development, so the flag has to be true for any
+      // preview build to reach a backend at all right now. Before a real
+      // production build: either replace this with a network_security_config.xml
+      // scoped to private/local IP ranges only, or drop it entirely once the
+      // backend is reachable over https://. Do not let this ship as `true`
+      // by accident — see SETUP.md's preview-build section.
+      usesCleartextTraffic: true,
       adaptiveIcon: {
         backgroundColor: '#E6F4FE',
         foregroundImage: './assets/android-icon-foreground.png',

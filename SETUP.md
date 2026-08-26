@@ -310,6 +310,8 @@ eas build --profile preview --platform android --non-interactive
 
 **If `EXPO_PUBLIC_API_URL` isn't set for the environment you're building, the build fails immediately** — `frontend/app.config.js` checks for it before anything is bundled, with an error naming exactly what's missing. This is deliberate: an earlier version of this project let a preview build silently succeed with no backend address baked in at all, producing an APK that looked fine but could never reach a server from any network. See `BUILD_LOG.md`'s 2026-08-26 entry for the full story — the fast, loud failure here exists specifically so that can't happen again unnoticed.
 
+**⚠️ `frontend/app.config.js` currently also sets `android.usesCleartextTraffic: true` — temporary, local-dev-only, and it must not reach a production build.** Without it, Android blocks every plain `http://` request an app makes by default (any `targetSdkVersion` 28+, which includes this project) — even once `EXPO_PUBLIC_API_URL` resolves correctly, the app still can't reach a backend at a bare `http://<ip>:5000` address without this flag. It exists only because a preview build during development talks to a LAN IP over plain HTTP. **Before any production build:** either replace it with a `network_security_config.xml` scoped to private/local IP ranges only, or drop the flag entirely once the backend is reachable over `https://`. Don't carry `true` here into a production build by habit — see `BUILD_LOG.md`'s 2026-08-26 entry for why this exists at all.
+
 ---
 
 ## Troubleshooting
