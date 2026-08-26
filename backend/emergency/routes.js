@@ -6,6 +6,7 @@
 //   POST /emergency/alerts/:id/cancel    "that was a mistake" — owner only
 //   POST /emergency/alerts/:id/resolve   "this is handled" — owner or family
 //   POST /emergency/alerts/:id/acknowledge  "I've seen this" — family only, stops escalation
+//   PATCH /emergency/alerts/:id/location attach a fresh fix that landed after send — owner only, any status
 //   GET  /emergency/family/alerts        active alerts for linked elderly users
 //   GET  /emergency/family/alerts/history recent resolved/cancelled alerts, last 7 days
 //   POST /emergency/locations            record one GPS reading
@@ -29,6 +30,7 @@ import {
   cancelAlert,
   resolveAlert,
   acknowledgeAlert,
+  attachAlertLocation,
   findFamilyLink,
   listActiveFamilyAlerts,
   listFamilyAlertHistory,
@@ -43,6 +45,7 @@ import {
   validateCloseAlertBody,
   validateHistoryQuery,
   validateSosAlertBody,
+  validateAttachLocationBody,
   validateCreateLocationBody,
   validateRegisterDeviceTokenBody,
 } from './validate.js';
@@ -231,6 +234,32 @@ emergencyRouter.post('/alerts/:id/acknowledge', requireAuth, async (req, res) =>
     });
   }
 
+  res.json({ status: 'ok', alert: toPublicAlert(updated) });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /emergency/alerts/:id/location — owner only, any status.
+//
+// Phase 1 step 4: the SOS-time capture keeps trying for a fresh fix past the
+// 4.5s send deadline (see ElderlyHomeScreen's SOS_LOCATION_ASYNC_CEILING_MS).
+// When one lands, this is how it reaches the alert already sent. Deliberately
+// not restricted to status = 'active' — a fix landing after the alert was
+// cancelled or resolved is still attached, so the record isn't stuck on "no
+// location" or an approximate reading just because the timing lost a race.
+// ---------------------------------------------------------------------------
+
+emergencyRouter.patch('/alerts/:id/location', requireAuth, async (req, res) => {
+  const id = requireAlertId(req);
+  const location = validateAttachLocationBody(req.body);
+
+  const alert = await findAlertById(id);
+  if (!alert) throw notFound('alert_not_found', 'No alert with that id.');
+
+  if (alert.user_id !== req.user.id) {
+    throw forbidden('not_alert_owner', 'Only the person who triggered this alert can attach a location to it.');
+  }
+
+  const updated = await attachAlertLocation(id, location);
   res.json({ status: 'ok', alert: toPublicAlert(updated) });
 });
 

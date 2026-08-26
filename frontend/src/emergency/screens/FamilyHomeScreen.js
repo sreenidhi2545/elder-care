@@ -30,9 +30,20 @@
 // card stays in this list and just shows who acknowledged it. The same
 // acknowledge endpoint is also reachable straight from the push notification
 // itself; see emergency/notifications/alertNotifications.js.
+//
+// Phase 1 step 4 adds the approximate-location badge: when
+// alert.locationIsApproximate is true, the reading came from a cached
+// getLastKnownPositionAsync fix rather than a fresh one at press time — the
+// person may have moved since. Deliberately loud (a fixed amber badge next to
+// the coordinates, not a tooltip), with wording that states how stale the fix
+// is rather than just "approximate," since staleness is the actual risk. When
+// a later poll (10s cadence, see POLL_WITH_ACTIVE_MS) picks up an
+// async-attached fresh fix that clears the flag, AlertCard shows a brief
+// "Confirmed location" transition rather than swapping the badge silently —
+// see the wasApproximateRef/justConfirmed state below.
 // ============================================================================
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -198,6 +209,16 @@ export function FamilyHomeScreen() {
   );
 }
 
+// How stale an approximate fix has to be before the wording escalates from a
+// plain "how long ago" statement to an explicit caution. 30 minutes is enough
+// time for someone to have genuinely moved, not just drifted GPS noise.
+const APPROXIMATE_STALE_MINUTES = 30;
+
+// How long the "Confirmed location" transition state stays visible after an
+// approximate fix gets upgraded, before it settles to no badge at all — long
+// enough to be noticed on a screen already open, short enough to not linger.
+const CONFIRMED_TRANSITION_MS = 8000;
+
 function AlertCard({
   alert,
   confirming,
@@ -213,10 +234,41 @@ function AlertCard({
   const hasLocation = alert.latitude != null && alert.longitude != null;
   const busy = resolving || acknowledging;
 
+  // Tracks the approximate -> confirmed transition across polls (10s
+  // cadence) so an async-attached fresh fix gets a visible "Confirmed
+  // location" moment instead of the badge just silently disappearing on the
+  // next render.
+  const wasApproximateRef = useRef(alert.locationIsApproximate);
+  const [justConfirmed, setJustConfirmed] = useState(false);
+
+  useEffect(() => {
+    if (wasApproximateRef.current && !alert.locationIsApproximate && hasLocation) {
+      setJustConfirmed(true);
+      const timer = setTimeout(() => setJustConfirmed(false), CONFIRMED_TRANSITION_MS);
+      wasApproximateRef.current = alert.locationIsApproximate;
+      return () => clearTimeout(timer);
+    }
+    wasApproximateRef.current = alert.locationIsApproximate;
+  }, [alert.locationIsApproximate, hasLocation]);
+
   return (
     <View style={styles.card}>
       <Text style={styles.cardName}>{alert.elderlyUser.fullName}</Text>
       <Text style={styles.cardType}>{alert.alertType.toUpperCase()} · {elapsed}</Text>
+
+      {hasLocation && alert.locationIsApproximate && (
+        <View style={styles.approximateBadge}>
+          <Text style={styles.approximateBadgeText}>
+            {formatApproximateWarning(alert.triggeredAt, alert.locationCapturedAt)}
+          </Text>
+        </View>
+      )}
+
+      {hasLocation && !alert.locationIsApproximate && justConfirmed && (
+        <View style={styles.confirmedBadge}>
+          <Text style={styles.confirmedBadgeText}>Confirmed location — updated fix received</Text>
+        </View>
+      )}
 
       {hasLocation && (
         <Pressable onPress={() => openInMaps(alert.latitude, alert.longitude)} accessibilityRole="button">
@@ -267,6 +319,41 @@ function AlertCard({
 
 function formatCoordinates(latitude, longitude) {
   return `${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`;
+}
+
+/**
+ * Wording for the approximate-location badge — states how stale the fix is
+ * rather than just flagging uncertainty, since staleness (has this person
+ * moved since?) is the actual risk. Escalates past
+ * APPROXIMATE_STALE_MINUTES to an explicit caution rather than a bare
+ * duration, and falls back to a generic warning when locationCapturedAt is
+ * missing (an older row, or a floor value the client sent without a
+ * timestamp) rather than showing a nonsensical duration.
+ */
+function formatApproximateWarning(triggeredAt, locationCapturedAt) {
+  if (!locationCapturedAt) {
+    return 'Approximate location — may not be current.';
+  }
+
+  const staleMinutes = Math.round((new Date(triggeredAt) - new Date(locationCapturedAt)) / 60000);
+
+  if (staleMinutes <= 0) {
+    return 'Approximate — from just before the alert.';
+  }
+
+  if (staleMinutes > APPROXIMATE_STALE_MINUTES) {
+    return 'Approximate — may be significantly out of date. Treat with caution.';
+  }
+
+  if (staleMinutes < 60) {
+    return `Approximate — from ${staleMinutes} minute${staleMinutes === 1 ? '' : 's'} before the alert.`;
+  }
+
+  const hours = Math.floor(staleMinutes / 60);
+  const minutes = staleMinutes % 60;
+  const hourPart = `${hours} hour${hours === 1 ? '' : 's'}`;
+  const suffix = minutes === 0 ? hourPart : `${hourPart} ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  return `Approximate — from ${suffix} before the alert.`;
 }
 
 /** Universal Google Maps link — opens the native maps app if one is installed, else a browser. */
@@ -344,6 +431,24 @@ const styles = StyleSheet.create({
   },
   cardName: { fontSize: type.heading, fontWeight: '700', color: colors.text },
   cardType: { fontSize: type.small, fontWeight: '700', color: colors.danger, letterSpacing: 0.5 },
+  approximateBadge: {
+    backgroundColor: colors.warningBg,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.warning,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+  },
+  approximateBadgeText: { fontSize: type.small, fontWeight: '700', color: colors.warning },
+  confirmedBadge: {
+    backgroundColor: '#DCFCE7',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.success,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+  },
+  confirmedBadgeText: { fontSize: type.small, fontWeight: '700', color: colors.success },
   locationLink: { fontSize: type.small, color: colors.primary, fontWeight: '600' },
   acknowledgedText: { fontSize: type.small, color: colors.text, fontWeight: '600' },
   actionRow: { gap: spacing.sm },

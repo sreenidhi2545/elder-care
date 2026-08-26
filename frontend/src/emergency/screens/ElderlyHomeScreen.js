@@ -16,6 +16,15 @@
 // capture at SOS press time, sent inline with the alert. Never a
 // precondition — see startCountdown/fireSos below. No notifications yet —
 // that's step 3. See BUILD_LOG.md.
+//
+// Phase 1, step 4: the SOS send still never waits past SOS_LOCATION_TIMEOUT_MS
+// (4.5s), but two additions attack the resulting "no location" rate directly.
+// A getLastKnownPositionAsync floor fills the initial send when no fresh fix
+// landed in time (marked isApproximate on the alert). And the fresh-fix read
+// keeps running past the send deadline, up to SOS_LOCATION_ASYNC_CEILING_MS —
+// if it lands late, fireSos PATCHes it onto the alert already sent, even if
+// the alert has since been cancelled or resolved. See captureLocation.js and
+// BUILD_LOG.md.
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -23,11 +32,13 @@ import { ActivityIndicator, Linking, Modal, Pressable, StyleSheet, Text, View } 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 
-import { cancelAlert, createSosAlert, listAlerts } from '../api/alerts';
+import { cancelAlert, createSosAlert, listAlerts, attachAlertLocation } from '../api/alerts';
 import { recordLocation } from '../api/locations';
 import { ApiError, NetworkError } from '../../shared/api/client';
 import {
   captureCurrentLocation,
+  beginSosLocationCapture,
+  captureLastKnownLocation,
   getLocationPermissionStatus,
   requestLocationPermission,
 } from '../../shared/location/captureLocation';
@@ -48,6 +59,13 @@ const POLL_IDLE_MS = 20_000;
 // settled (a reading or null), so awaiting it in fireSos adds no wait.
 const SOS_LOCATION_TIMEOUT_MS = 4500;
 
+// Phase 1 step 4: how long a fresh fix keeps being watched for, past the
+// 4.5s send deadline, before the alert gives up on ever getting an upgrade.
+// Measured from the same start point as SOS_LOCATION_TIMEOUT_MS (countdown
+// start, i.e. SOS press) — never delays the send itself, only how long the
+// async attach in fireSos keeps a late fix worth PATCHing onto the alert.
+const SOS_LOCATION_ASYNC_CEILING_MS = 25_000;
+
 export function ElderlyHomeScreen({ navigation }) {
   const { user, signOut } = useAuth();
 
@@ -62,6 +80,10 @@ export function ElderlyHomeScreen({ navigation }) {
   const [locationPermission, setLocationPermission] = useState('checking');
   const [locationShared, setLocationShared] = useState(false);
   const sosLocationRef = useRef(null); // in-flight capture promise during the countdown
+  // The same fresh-fix read as sosLocationRef, but bounded by
+  // SOS_LOCATION_ASYNC_CEILING_MS instead of SOS_LOCATION_TIMEOUT_MS — held
+  // separately so fireSos can keep watching for a late fix after send.
+  const sosLocationFullRef = useRef(null);
 
   // 'checking' | 'off' | 'enabling' | 'on' | 'foreground_denied' | 'background_denied'
   const [trackingPhase, setTrackingPhase] = useState('checking');
@@ -215,7 +237,13 @@ export function ElderlyHomeScreen({ navigation }) {
     // Started now, not awaited until fireSos — see SOS_LOCATION_TIMEOUT_MS.
     // If permission isn't granted this resolves to null immediately, which
     // is exactly the "fire without a location" path.
-    sosLocationRef.current = captureCurrentLocation({ timeoutMs: SOS_LOCATION_TIMEOUT_MS });
+    const capture = beginSosLocationCapture({ timeoutMs: SOS_LOCATION_TIMEOUT_MS });
+    sosLocationRef.current = capture.settled;
+
+    // Same underlying read, watched past the send deadline for the
+    // async-attach path in fireSos — see SOS_LOCATION_ASYNC_CEILING_MS.
+    const asyncCeiling = new Promise((resolve) => setTimeout(() => resolve(null), SOS_LOCATION_ASYNC_CEILING_MS));
+    sosLocationFullRef.current = Promise.race([capture.full, asyncCeiling]);
 
     countdownTimer.current = setInterval(() => {
       setCountdown((n) => {
@@ -238,11 +266,25 @@ export function ElderlyHomeScreen({ navigation }) {
     setPhase('sending');
     // Already settled by now — SOS_LOCATION_TIMEOUT_MS is shorter than the
     // countdown that just finished — so this await does not delay sending.
-    const location = await (sosLocationRef.current ?? Promise.resolve(null));
+    const freshLocation = await (sosLocationRef.current ?? Promise.resolve(null));
+
+    // No fresh fix in time — fall back to a cached position rather than
+    // sending nothing. getLastKnownPositionAsync doesn't touch the radio, so
+    // this costs no real time; isApproximate: true means the dashboard marks
+    // it plainly rather than treating it as equivalent to a real reading.
+    const location = freshLocation ?? (await captureLastKnownLocation());
+
     try {
       const { alert: created } = await createSosAlert(location);
       setAlert(created);
       setPhase('active');
+
+      // Fire-and-forget: a fresh fix landing after send should still reach
+      // the alert (Phase 1 step 4), but must never hold up the 'active'
+      // transition above. Only worth watching for if send didn't already
+      // carry a fresh fix — freshLocation non-null means there is nothing to
+      // upgrade.
+      if (!freshLocation) attachLateSosLocation(created.id);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'sos_already_active') {
         // Not a failure — someone already pressed it (perhaps this same
@@ -262,6 +304,26 @@ export function ElderlyHomeScreen({ navigation }) {
           : 'Something went wrong sending your alert. Tap SOS to try again.'
       );
       setPhase('idle');
+    }
+  }
+
+  /**
+   * Waits on sosLocationFullRef up to SOS_LOCATION_ASYNC_CEILING_MS and, if a
+   * fresh fix lands, PATCHes it onto the alert. Never awaited by fireSos —
+   * runs after 'active' is already showing. Attached even if the person has
+   * since cancelled the alert locally; the server accepts a late fix on any
+   * status (see backend/emergency/routes.js), so no status check here either.
+   * Best-effort like every other location call in this file: a failure here
+   * is not shown to the user, the alert just keeps whatever it already had.
+   */
+  async function attachLateSosLocation(alertId) {
+    const lateLocation = await (sosLocationFullRef.current ?? Promise.resolve(null));
+    if (!lateLocation) return;
+    try {
+      await attachAlertLocation(alertId, lateLocation);
+    } catch {
+      // Nobody is watching this promise — a lost late fix is no worse than
+      // the "no fresh fix in time" case this whole path exists to improve on.
     }
   }
 

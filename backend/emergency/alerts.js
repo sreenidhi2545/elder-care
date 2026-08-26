@@ -27,6 +27,9 @@ export function toPublicAlert(row) {
     severity: row.severity,
     latitude: row.latitude,
     longitude: row.longitude,
+    locationAccuracyMeters: row.location_accuracy_meters,
+    locationIsApproximate: row.location_is_approximate,
+    locationCapturedAt: row.location_captured_at,
     message: row.message,
     triggeredAt: row.triggered_at,
     acknowledgedAt: row.acknowledged_at,
@@ -61,15 +64,55 @@ export async function findActiveSosAlert(userId) {
  * directly onto the alert's own latitude/longitude, not a linked `locations`
  * row: nothing reads `location_id` today, and this is the copy that has to
  * outlive the 30-day location purge anyway. See BUILD_LOG.md.
+ *
+ * `location.isApproximate` (Phase 1 step 4) is true only when the device sent
+ * a getLastKnownPositionAsync floor value because no fresh fix landed within
+ * SOS_LOCATION_TIMEOUT_MS — see attachAlertLocation for the fresh fix that
+ * may arrive afterward and clear it.
  */
 export async function createSosAlert(userId, location) {
   const { rows } = await query(
-    `INSERT INTO alerts (user_id, alert_type, status, severity, triggered_at, latitude, longitude)
-     VALUES ($1, 'sos', 'active', $2, now(), $3, $4)
+    `INSERT INTO alerts (
+       user_id, alert_type, status, severity, triggered_at,
+       latitude, longitude, location_accuracy_meters, location_is_approximate, location_captured_at
+     )
+     VALUES ($1, 'sos', 'active', $2, now(), $3, $4, $5, $6, $7)
      RETURNING *`,
-    [userId, SOS_SEVERITY, location?.latitude ?? null, location?.longitude ?? null]
+    [
+      userId,
+      SOS_SEVERITY,
+      location?.latitude ?? null,
+      location?.longitude ?? null,
+      location?.accuracyMeters ?? null,
+      location?.isApproximate ?? false,
+      location?.capturedAt ?? null,
+    ]
   );
   return rows[0];
+}
+
+/**
+ * Attaches a fresh location fix to an already-created alert — Phase 1 step 4.
+ * Unlike cancel/resolve/acknowledge, this is not gated to status = 'active':
+ * a fix that lands after the alert was cancelled or resolved is still
+ * accepted, for the record — the family may already be looking at "no
+ * location" or an approximate one and a real reading arriving late is still
+ * worth showing. Always clears location_is_approximate to false: this path
+ * only ever carries a fresh fix, never another last-known read.
+ */
+export async function attachAlertLocation(id, location) {
+  const { rows } = await query(
+    `UPDATE alerts
+        SET latitude = $2,
+            longitude = $3,
+            location_accuracy_meters = $4,
+            location_is_approximate = FALSE,
+            location_captured_at = $5
+      WHERE id = $1
+      RETURNING *`,
+    [id, location.latitude, location.longitude, location.accuracyMeters ?? null, location.capturedAt ?? null]
+  );
+  return rows[0] ?? null;
 }
 
 /** The caller's own currently-active fall alert, if there is one. */
@@ -218,6 +261,9 @@ function withLocationGate(publicAlert, canViewLocation) {
     ...publicAlert,
     latitude: canViewLocation ? publicAlert.latitude : null,
     longitude: canViewLocation ? publicAlert.longitude : null,
+    locationAccuracyMeters: canViewLocation ? publicAlert.locationAccuracyMeters : null,
+    locationIsApproximate: canViewLocation ? publicAlert.locationIsApproximate : null,
+    locationCapturedAt: canViewLocation ? publicAlert.locationCapturedAt : null,
     canViewLocation,
   };
 }

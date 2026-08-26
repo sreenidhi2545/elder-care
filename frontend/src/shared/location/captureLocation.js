@@ -14,6 +14,13 @@
 // under shared/, because it's a device capability, not emergency-module
 // business logic — the same way shared/api/client.js isn't owned by one
 // screen either.
+//
+// Phase 1 step 4 adds beginSosLocationCapture and captureLastKnownLocation —
+// the SOS button never waits past SOS_LOCATION_TIMEOUT_MS to send, but a
+// fresh fix that lands late is worth attaching to the alert after the fact
+// rather than discarding, and a cached position is worth sending as an
+// explicitly-marked floor when nothing fresh is ready in time. See
+// ElderlyHomeScreen and BUILD_LOG.md.
 // ============================================================================
 
 import * as Location from 'expo-location';
@@ -32,27 +39,20 @@ export async function requestLocationPermission() {
 }
 
 /**
- * Best-effort single reading. Returns null rather than throwing for every
- * case that isn't "something is actually broken": permission not granted, no
- * fix within `timeoutMs`, or the platform refusing (GPS off, airplane mode).
- *
- * Battery level is fetched alongside but is genuinely optional — some
- * platforms/emulators don't support it, and a missing battery reading is not
- * a reason to discard an otherwise-good position fix.
+ * Requests one fresh fix and shapes it, or resolves null for every case that
+ * isn't "something is actually broken": permission not granted, GPS off,
+ * airplane mode, hardware error, permission revoked mid-flight. No timeout of
+ * its own — callers race or await this directly. Kept separate from
+ * captureCurrentLocation so a caller that needs to keep observing past a
+ * timeout (the SOS async-attach path — see ElderlyHomeScreen) can hold onto
+ * this same promise instead of it being discarded inside a Promise.race.
  */
-export async function captureCurrentLocation({ timeoutMs = 8000 } = {}) {
+async function readPosition() {
   try {
     const status = await getLocationPermissionStatus();
     if (status !== 'granted') return null;
 
-    const timeout = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs));
-
-    const position = await Promise.race([
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-      timeout,
-    ]);
-    if (!position) return null;
-
+    const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
     const batteryLevel = await Battery.getBatteryLevelAsync().catch(() => null);
 
     return {
@@ -64,10 +64,65 @@ export async function captureCurrentLocation({ timeoutMs = 8000 } = {}) {
           ? Math.round(batteryLevel * 100)
           : null,
       recordedAt: new Date(position.timestamp).toISOString(),
+      isApproximate: false,
     };
   } catch {
-    // GPS hardware error, permission revoked mid-flight, etc. — location is
-    // enrichment, never a reason to fail whatever the caller is doing.
+    return null;
+  }
+}
+
+/**
+ * Best-effort single reading, bounded by `timeoutMs` — resolves null if
+ * `readPosition` hasn't settled in time. This is the plain fire-and-discard
+ * shape every caller except the SOS button uses (mount-time sharing, fall
+ * alerts, ambulance booking): once the timeout wins the race, nothing here
+ * keeps watching the underlying read.
+ */
+export async function captureCurrentLocation({ timeoutMs = 8000 } = {}) {
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs));
+  return Promise.race([readPosition(), timeout]);
+}
+
+/**
+ * SOS-specific: starts one fresh-fix read and returns two views onto it —
+ * `settled`, bounded by `timeoutMs` (send-time value, must stay short so the
+ * alert is never delayed), and `full`, the same underlying read with no
+ * ceiling of its own, for a caller that wants to keep waiting past send time
+ * for a fix that arrives late (see SOS_LOCATION_ASYNC_CEILING_MS in
+ * ElderlyHomeScreen). The read is started exactly once; `settled` racing it
+ * against a timeout does not stop `full` from eventually resolving to
+ * whatever `readPosition` returns.
+ */
+export function beginSosLocationCapture({ timeoutMs = 4500 } = {}) {
+  const full = readPosition();
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs));
+  return { settled: Promise.race([full, timeout]), full };
+}
+
+/**
+ * A cached position, if the OS has one, with no wait for the radio — this is
+ * the floor value under SOS_LOCATION_TIMEOUT_MS, used only when a fresh fix
+ * hasn't landed by send time. Always shaped with isApproximate: true — a
+ * last-known position can be minutes or hours stale, so it's never treated as
+ * equivalent to a fresh reading by the caller.
+ */
+export async function captureLastKnownLocation() {
+  try {
+    const status = await getLocationPermissionStatus();
+    if (status !== 'granted') return null;
+
+    const position = await Location.getLastKnownPositionAsync();
+    if (!position) return null;
+
+    return {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracyMeters: position.coords.accuracy ?? null,
+      batteryLevel: null,
+      recordedAt: new Date(position.timestamp).toISOString(),
+      isApproximate: true,
+    };
+  } catch {
     return null;
   }
 }

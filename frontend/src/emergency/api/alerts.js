@@ -16,14 +16,43 @@ import { apiRequest } from '../../shared/api/client';
  * user — see ElderlyHomeScreen, which treats it as reassurance ("help is
  * already on the way") rather than an error.
  *
- * @param {{ latitude: number, longitude: number } | null} [location] Captured
- *   at press time, best-effort — omit entirely if no fix was available in
- *   time. Never wait on this to fire the alert; see ElderlyHomeScreen.
+ * @param {{ latitude: number, longitude: number, accuracyMeters?: number, isApproximate?: boolean, recordedAt?: string } | null} [location]
+ *   Captured at press time, best-effort — omit entirely if no fix (fresh or
+ *   last-known) was available in time. Never wait on this to fire the alert;
+ *   see ElderlyHomeScreen. `isApproximate: true` marks a getLastKnownPositionAsync
+ *   floor value rather than a fresh reading.
  */
 export function createSosAlert(location) {
   return apiRequest('/emergency/alerts', {
     method: 'POST',
-    body: location ? { latitude: location.latitude, longitude: location.longitude } : undefined,
+    body: location
+      ? {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracyMeters: location.accuracyMeters ?? undefined,
+          isApproximate: location.isApproximate ?? undefined,
+          capturedAt: location.recordedAt ?? undefined,
+        }
+      : undefined,
+  });
+}
+
+/**
+ * PATCH /emergency/alerts/:id/location — attaches a fresh fix that landed
+ * after the alert already sent. Owner only; accepted regardless of the
+ * alert's current status. See ElderlyHomeScreen's async-attach flow.
+ * @param {string} id
+ * @param {{ latitude: number, longitude: number, accuracyMeters?: number, recordedAt?: string }} location
+ */
+export function attachAlertLocation(id, location) {
+  return apiRequest(`/emergency/alerts/${id}/location`, {
+    method: 'PATCH',
+    body: {
+      latitude: location.latitude,
+      longitude: location.longitude,
+      accuracyMeters: location.accuracyMeters ?? undefined,
+      capturedAt: location.recordedAt ?? undefined,
+    },
   });
 }
 

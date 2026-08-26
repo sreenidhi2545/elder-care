@@ -64,16 +64,69 @@ export function validateListQuery(query = {}) {
  * POST /emergency/alerts — `latitude`/`longitude` are optional and, if sent,
  * captured on the device at press time and written straight onto the alert.
  * Never required: an SOS must fire with or without a location fix.
+ *
+ * `accuracyMeters`/`isApproximate`/`capturedAt` are optional alongside the
+ * coordinates — Phase 1 step 4, carrying a getLastKnownPositionAsync floor
+ * value onto the initial send when no fresh fix landed within
+ * SOS_LOCATION_TIMEOUT_MS. `isApproximate` defaults false, matching a fresh
+ * fix; the client only ever sends true for a last-known reading.
  */
 export function validateSosAlertBody(body = {}) {
-  const { latitude, longitude } = body;
-  const errors = coordinateErrors(latitude, longitude, { required: false });
+  const { latitude, longitude, accuracyMeters, isApproximate, capturedAt } = body;
+  const errors = [
+    ...coordinateErrors(latitude, longitude, { required: false }),
+    ...fieldErrors([
+      { when: accuracyMeters !== undefined && (!isFiniteNumber(accuracyMeters) || accuracyMeters < 0),
+        field: 'accuracyMeters', message: 'Accuracy must be a non-negative number.' },
+      { when: isApproximate !== undefined && typeof isApproximate !== 'boolean',
+        field: 'isApproximate', message: 'isApproximate must be a boolean.' },
+      { when: capturedAt !== undefined && Number.isNaN(new Date(capturedAt).getTime()),
+        field: 'capturedAt', message: 'capturedAt must be a valid date.' },
+    ]),
+  ];
 
   if (errors.length > 0) {
     throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
   }
 
-  return latitude === undefined ? { latitude: null, longitude: null } : { latitude, longitude };
+  return {
+    latitude: latitude ?? null,
+    longitude: longitude ?? null,
+    accuracyMeters: accuracyMeters ?? null,
+    isApproximate: isApproximate ?? false,
+    capturedAt: capturedAt !== undefined ? new Date(capturedAt).toISOString() : null,
+  };
+}
+
+/**
+ * PATCH /emergency/alerts/:id/location — a fresh fix that landed after the
+ * alert already sent (Phase 1 step 4's async-attach path). Always a real
+ * reading, never a last-known one — isApproximate is not a caller option
+ * here, alerts.js hardcodes it false on write.
+ */
+export function validateAttachLocationBody(body = {}) {
+  const { latitude, longitude, accuracyMeters, capturedAt } = body;
+
+  const errors = [
+    ...coordinateErrors(latitude, longitude, { required: true }),
+    ...fieldErrors([
+      { when: accuracyMeters !== undefined && (!isFiniteNumber(accuracyMeters) || accuracyMeters < 0),
+        field: 'accuracyMeters', message: 'Accuracy must be a non-negative number.' },
+      { when: capturedAt !== undefined && Number.isNaN(new Date(capturedAt).getTime()),
+        field: 'capturedAt', message: 'capturedAt must be a valid date.' },
+    ]),
+  ];
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return {
+    latitude,
+    longitude,
+    accuracyMeters: accuracyMeters ?? null,
+    capturedAt: capturedAt !== undefined ? new Date(capturedAt).toISOString() : null,
+  };
 }
 
 /** POST /emergency/locations */

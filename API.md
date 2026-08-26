@@ -129,6 +129,7 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `POST` | `/emergency/alerts/:id/cancel` | Bearer | "That was a mistake" — alert owner only |
 | `POST` | `/emergency/alerts/:id/resolve` | Bearer | "This is handled" — owner or a permitted family member |
 | `POST` | `/emergency/alerts/:id/acknowledge` | Bearer | "I've seen this" — a permitted family member only; stops escalation, does not close the alert |
+| `PATCH` | `/emergency/alerts/:id/location` | Bearer | Attach a fresh GPS fix that landed after send — alert owner only, any status |
 | `GET` | `/emergency/family/alerts` | Bearer + `family` | Active alerts for elderly users the caller is linked to |
 | `GET` | `/emergency/family/alerts/history` | Bearer + `family` | Resolved/cancelled alerts from the last 7 days, same linked users |
 | `POST` | `/emergency/locations` | Bearer | Record one GPS reading |
@@ -417,8 +418,13 @@ Presses SOS for the signed-in user. `alertType` is always `sos`, `severity` is a
 |---|---|---|---|
 | `latitude` | number | no | -90 to 90. Must be sent with `longitude` |
 | `longitude` | number | no | -180 to 180. Must be sent with `latitude` |
+| `accuracyMeters` | number | no | Non-negative |
+| `isApproximate` | boolean | no | Defaults `false`. `true` only for a cached `getLastKnownPositionAsync` reading, never a fresh fix |
+| `capturedAt` | string | no | ISO 8601. When the device actually took this reading |
 
-Captured on the device at press time and written straight onto the alert — **never a precondition.** An SOS must fire whether or not a location fix was available; the app does not wait on GPS to send this request. Omit both fields entirely if no fix was captured in time; do not send one without the other.
+Captured on the device at press time and written straight onto the alert — **never a precondition.** An SOS must fire whether or not a location fix was available; the app does not wait on GPS to send this request. Omit both `latitude`/`longitude` entirely if no fix was captured in time; do not send one without the other.
+
+**`isApproximate: true` (Phase 1 step 4) means a fresh fix hadn't landed within the app's send deadline, so a cached position was sent as a floor instead.** `capturedAt` is what makes that useful — it is when the device actually took the cached reading, which can be well before `triggeredAt`, not when the alert was created. See `PATCH /emergency/alerts/:id/location` below for how a fresh fix that lands afterward upgrades this.
 
 **Response `201`**
 
@@ -433,6 +439,9 @@ Captured on the device at press time and written straight onto the alert — **n
     "severity": "critical",
     "latitude": null,
     "longitude": null,
+    "locationAccuracyMeters": null,
+    "locationIsApproximate": false,
+    "locationCapturedAt": null,
     "message": null,
     "triggeredAt": "2026-08-15T06:51:50.230Z",
     "acknowledgedAt": null,
@@ -551,6 +560,35 @@ No request body.
 
 ---
 
+### `PATCH /emergency/alerts/:id/location`
+
+Attaches a fresh GPS fix to an alert that already sent — Phase 1 step 4. The SOS button never waits past its own send deadline, but the app keeps trying for a fresh fix a while longer in the background; this is how that fix reaches an alert that already went out with `isApproximate: true` or no location at all. Only the alert's owner may call this.
+
+**Not restricted to `status: "active"`.** A fix landing after the alert was cancelled or resolved is still attached, for the record — the family may already be looking at "no location," and a real reading arriving late is still worth having.
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `latitude` | number | **yes** | -90 to 90 |
+| `longitude` | number | **yes** | -180 to 180 |
+| `accuracyMeters` | number | no | Non-negative |
+| `capturedAt` | string | no | ISO 8601. When the device actually took this reading |
+
+Always a fresh fix — there is no `isApproximate` field here. The server hardcodes `locationIsApproximate` to `false` on write; this endpoint has no way to attach another cached reading.
+
+**Response `200`** — the updated alert, `latitude`/`longitude`/`locationAccuracyMeters`/`locationCapturedAt` set from the request, `locationIsApproximate: false`, same shape as `POST /emergency/alerts` otherwise.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | `id` is not a UUID; `latitude`/`longitude` missing or out of range; `accuracyMeters` or `capturedAt` fail their own rules |
+| `403` | `not_alert_owner` | The caller did not trigger this alert |
+| `404` | `alert_not_found` | No alert with that id |
+
+---
+
 ### `GET /emergency/family/alerts`
 
 Active alerts for every elderly user the caller has an `active` `family_links` row with. Role-gated to `family`.
@@ -559,7 +597,9 @@ Active alerts for every elderly user the caller has an `active` `family_links` r
 
 **`acknowledgedByName` is the acknowledging family member's name, joined in for display** — `null` until someone acknowledges. `acknowledgedAt`/`acknowledgedBy` (raw id) are already part of every alert shape; this adds the name so the screen doesn't have to look it up separately.
 
-**`latitude`/`longitude` are redacted to `null` when the caller's `family_links.can_view_location` is `false`**, regardless of what's actually stored on the alert — enforced in the query, not left to the app to hide. Each alert also carries `canViewLocation` so the app can tell "no fix yet" apart from "you don't have permission to see it," though today it doesn't need to: it just renders whatever coordinates it's given.
+**`latitude`/`longitude` are redacted to `null` when the caller's `family_links.can_view_location` is `false`**, regardless of what's actually stored on the alert — enforced in the query, not left to the app to hide. `locationAccuracyMeters`/`locationIsApproximate`/`locationCapturedAt` are redacted the same way, together with the coordinates. Each alert also carries `canViewLocation` so the app can tell "no fix yet" apart from "you don't have permission to see it," though today it doesn't need to: it just renders whatever coordinates it's given.
+
+**`locationIsApproximate: true` is what the family dashboard's amber badge is keyed on** (Phase 1 step 4, see `FamilyHomeScreen.js`) — a cached fix sent as a floor value, not a fresh reading at press time. `locationCapturedAt` drives the badge's wording (how long before the alert the fix was actually taken); a later `PATCH /emergency/alerts/:id/location` clears the flag once a fresh fix lands, which the dashboard picks up on its next poll and shows as a brief "Confirmed location" transition.
 
 **Response `200`**
 
@@ -576,6 +616,9 @@ Active alerts for every elderly user the caller has an `active` `family_links` r
       "severity": "critical",
       "latitude": "12.971599",
       "longitude": "77.594566",
+      "locationAccuracyMeters": "18.20",
+      "locationIsApproximate": false,
+      "locationCapturedAt": "2026-08-15T06:51:48.900Z",
       "triggeredAt": "2026-08-15T06:51:50.230Z",
       "acknowledgedAt": null,
       "acknowledgedBy": null,
@@ -1015,6 +1058,6 @@ Everything below is planned but does not exist. Do not code against it — it wi
 | Family links — invitations, approval, permissions | 1 | Sree |
 | Emergency contacts management (add/edit/remove/reorder) | 1 | Sree |
 
-**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above.
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above.
 
 `family_links` and `emergency_contacts` rows both must still be created directly (no management endpoints for either yet) — same situation, same reason: nothing in this step needed one, so nothing was built ahead of being asked for. See `backend/scripts/seed-test-users.js` for how development data gets in either table today.

@@ -808,3 +808,45 @@ Checked how often `ElderlyHomeScreen`'s mount-time capture effect (empty depende
 ### Not verified
 
 **Not run on a device.** The preview APK bundles its own JS, so nothing above has been confirmed to actually run correctly outside of the backend-level `createLocation` check described above — the `source` tagging, the dedup guard under real duplicate traffic, and the frequency analysis's "cold start only" claim all still need someone to install the APK and use it.
+
+---
+
+## 2026-08-26 — SOS location reliability: 44% NULL rate, async attach + last-known floor
+
+**Live data, not assumption.** Queried the running dev database directly rather than reasoning from code alone: of 27 SOS alerts, 12 (44.4%) had NULL `latitude`/`longitude`. Bursty by session, not time-of-day — some sessions were 0% NULL, others 100%, consistent with rapid repeat presses rather than a diurnal pattern.
+
+**Walked `captureCurrentLocation` (`captureLocation.js`) against that data.** `SOS_LOCATION_TIMEOUT_MS = 4500` races `Location.getCurrentPositionAsync({ accuracy: Balanced })` against a bare `setTimeout`; whichever settles first wins, and the loser was previously discarded outright — no last-known fallback existed anywhere in the app (`getLastKnownPositionAsync` was never called). A miss at 4.5s meant a permanently NULL alert, even though the same fix often would have landed a few seconds later. Confirmed the send itself is never delayed: the countdown is 5s, longer than the 4.5s race, so `fireSos` always finds it already settled.
+
+**A second live finding, chased before touching any code: `locations.accuracy_meters = 100.00` on 19 rows, exact to two decimals.** Initially suspected an emulator default; the user corrected this — all testing has been on a real Samsung device, no emulator in this project. Re-checked every write path (`captureLocation.js`, `backgroundLocationTask.js`, `backend/emergency/{validate.js,locations.js}`, `scripts/seed-test-users.js`) for a hardcoded `100` — none exists; every path passes `position.coords.accuracy`/client-supplied `accuracyMeters` straight through, defaulting to `null` on absence, never to `100`. `seed-test-users.js` doesn't touch `locations` at all. Conclusion: the flat `100.00` is Android's own `coords.accuracy` report for `PRIORITY_BALANCED_POWER_ACCURACY` (network/fused-provider) fixes — a real device value, not app-code or seed-data injected, but still a bucketed ceiling rather than a genuine per-fix measurement. Not a bug; no code change from this half of the finding. A separate cluster (`315.95`, three rows, identical coordinates and accuracy across captures 43–83s apart) does look like a cached fix reissued rather than three fresh readings — consistent with the fix below.
+
+### Schema — `backend/shared/db/schema.sql`, `alerts` table
+
+Three columns added inline (matching the project's existing convention — schema changes live in `schema.sql`, not a bolted-on migration file; see the 2026-08-17 entry above for the same reasoning applied to `locations`):
+
+```sql
+location_accuracy_meters  NUMERIC(6,2),
+location_is_approximate   BOOLEAN     NOT NULL DEFAULT FALSE,
+location_captured_at      TIMESTAMPTZ,
+```
+
+Applied against the running dev database as an additive `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, non-blocking, no backfill — existing rows correctly read `FALSE`/`NULL` (no historical alert claimed to be approximate). `location_captured_at` is distinct from `triggered_at` on purpose: a last-known or async-attached fix can predate or postdate alert creation by a meaningful amount, and the family dashboard's badge wording depends on knowing which.
+
+### Backend — `validate.js`, `alerts.js`, `routes.js`
+
+`validateSosAlertBody` accepts optional `accuracyMeters`/`isApproximate`/`capturedAt` alongside the existing coordinates. New `validateAttachLocationBody` for the PATCH body — coordinates required, no `isApproximate` field (the server hardcodes it `false` on that write path; async-attach only ever carries a fresh fix). `createSosAlert` writes all three new columns; new `attachAlertLocation(id, location)` does the PATCH-time `UPDATE`, deliberately with **no `status = 'active'` guard** in the `WHERE` clause — unlike `cancelAlert`/`resolveAlert`, a late fix is accepted on a cancelled or resolved alert too, so the record isn't stuck on "no location" just because the timing lost a race. `toPublicAlert`/`withLocationGate` expose and redact the three new fields the same way as `latitude`/`longitude` — together, under the same `can_view_location` gate.
+
+New route: `PATCH /emergency/alerts/:id/location`, owner-only (`alert.user_id !== req.user.id` → 403), any status, documented in `API.md` alongside the rest of the alerts endpoints.
+
+### Frontend capture — `captureLocation.js`, `ElderlyHomeScreen.js`
+
+`captureCurrentLocation`'s internal `Promise.race` previously discarded the losing `getCurrentPositionAsync` call once the timeout won — restructured so the underlying read (`readPosition`, extracted, no timeout of its own) can be held onto past that point. New `beginSosLocationCapture({ timeoutMs })` returns both `settled` (the existing race, used for the send-time value) and `full` (the same read, unbounded) so a caller can keep watching after the send deadline without a second radio request. New `captureLastKnownLocation()` wraps `getLastKnownPositionAsync` — no radio use, near-instant, always shaped `isApproximate: true`.
+
+`ElderlyHomeScreen.js`: `SOS_LOCATION_TIMEOUT_MS` unchanged at 4500 — the send gate is untouched, per the explicit constraint that GPS must never delay an SOS. New `SOS_LOCATION_ASYNC_CEILING_MS = 25_000`, how long the async-attach path keeps watching for a late fix, measured from countdown start (SOS press), same reference point as the send timeout. `fireSos`: if the 4.5s race comes back null, falls back to `captureLastKnownLocation()` as the initial send value (marked `isApproximate: true`); either way, if no *fresh* fix had already landed by send time, fires `attachLateSosLocation(alertId)` without awaiting it — watches the ceiling-bounded `full` read, and `PATCH`es the alert if one lands. Runs regardless of whether the person has since cancelled the alert locally, matching the backend's no-status-guard behavior. Known residual gap, stated rather than papered over: if the app backgrounds or is killed right after send, this promise has no guarantee of ever resolving — an improvement to the miss rate, not a full close of it.
+
+### Family dashboard — `FamilyHomeScreen.js`, `theme.js`
+
+New `colors.warning`/`colors.warningBg` (amber), kept separate from `danger`/`success` — an approximate-location signal is a different fact from the alert's own severity or a confirmed reading, and reusing either color would blur them. `AlertCard` renders a fixed amber badge (not a tooltip) next to the coordinates whenever `locationIsApproximate` is true, wording keyed on staleness rather than a bare "approximate": `"Approximate — from N minutes before the alert"` under 30 minutes, escalating past that to `"...may be significantly out of date. Treat with caution."` (`APPROXIMATE_STALE_MINUTES`), with a generic fallback when `locationCapturedAt` is missing. A `wasApproximateRef`/`justConfirmed` pair detects the true→false transition across polls (10s cadence while any alert is active, confirmed by reading `POLL_WITH_ACTIVE_MS` directly rather than assumed) and shows a green "Confirmed location — updated fix received" badge for `CONFIRMED_TRANSITION_MS` (8s) rather than the amber badge just silently vanishing on the next render.
+
+### Not yet verified
+
+Nothing above has run against the live dev database or a device yet — the schema `ALTER TABLE` needs to actually run (documented above and given to the user to execute, since it was blocked by the environment's permission classifier from being run directly), and the full send → miss → last-known-floor → late-PATCH → dashboard-badge-transition path needs a real SOS press with GPS deliberately slowed or unavailable to confirm end to end.

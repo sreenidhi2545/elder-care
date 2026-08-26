@@ -254,6 +254,14 @@ CREATE TABLE alerts (
     -- outlives the 30-day location retention window.
     latitude          NUMERIC(9,6),
     longitude         NUMERIC(9,6),
+    -- Accuracy of whatever reading is currently on latitude/longitude, and
+    -- when the device actually took it — distinct from triggered_at, since a
+    -- last-known or async-attached fix can predate or postdate alert
+    -- creation. location_is_approximate is true only for a getLastKnownPositionAsync
+    -- floor value; an async-attached fresh fix always clears it back to false.
+    location_accuracy_meters  NUMERIC(6,2),
+    location_is_approximate   BOOLEAN     NOT NULL DEFAULT FALSE,
+    location_captured_at      TIMESTAMPTZ,
     location_id       UUID            REFERENCES locations (id) ON DELETE SET NULL,
     geofence_id       UUID            REFERENCES geofences (id) ON DELETE SET NULL,
     message           TEXT,
