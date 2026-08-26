@@ -97,7 +97,7 @@ elder-care/
 #### 3. 24/7 Emergency Response Center
 - **Helpline Contact Screen**: Contact screen with a prominent **CALL EMERGENCY CENTER** primary button (min height 56px).
 - **Native OS Dialer Integration**: Calls `Linking.openURL('tel:<number>')` to launch the device's native phone dialer with user confirmation.
-- **Configurable Settings**: Response helpline phone number (`EMERGENCY_RESPONSE_CENTER_PHONE`) and desk name (`EMERGENCY_RESPONSE_CENTER_NAME`) configured in `src/shared/config.js` (overridable via `app.json` / `extra`).
+- **Configurable Settings**: Response helpline phone number (`EMERGENCY_RESPONSE_CENTER_PHONE`) and desk name (`EMERGENCY_RESPONSE_CENTER_NAME`) configured in `src/shared/config.js` (overridable via `app.config.js` / `extra`).
 - **Emergency Advice**: Clear, calm bullet-point instructions for crisis situations.
 - **Emergency Shortcuts**: Quick navigation links to Ambulance Booking, Disaster Alerts, and Emergency SOS.
 
