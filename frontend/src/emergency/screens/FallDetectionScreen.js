@@ -1,18 +1,19 @@
 // ============================================================================
-// Fall Detection Screen — ElderCare
+// Hybrid Fall Detection Screen — ElderCare
 //
-// Dedicated manual "I FELL" emergency trigger screen.
-// Captures GPS location, confirms user intent to prevent accidental alerts,
-// creates a PostgreSQL alert record ('fall'), and triggers emergency contact notifications.
+// State-of-the-art, elderly-friendly emergency fall protection interface.
+// Combines automatic motion monitoring (via phone motion sensors) with a
+// prominent manual "I FELL" emergency trigger button.
 // ============================================================================
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from 'react-native';
@@ -20,6 +21,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { cancelAlert, createFallAlert, listAlerts } from '../api/alerts';
 import { captureCurrentLocation } from '../../shared/location/captureLocation';
+import {
+  checkSensorAvailability,
+  FALL_SENSOR_CONFIG,
+  startFallDetection,
+} from '../services/fallSensorService';
 import { colors, spacing, type } from '../../shared/ui/theme';
 
 export function FallDetectionScreen({ navigation }) {
@@ -29,9 +35,29 @@ export function FallDetectionScreen({ navigation }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [cancelling, setCancelling] = useState(false);
+  const [statusBanner, setStatusBanner] = useState(null);
 
-  // Check for pre-existing active fall alert on mount
-  const checkActiveAlert = useCallback(async () => {
+  // Sensor state
+  const [sensorAvailable, setSensorAvailable] = useState(false);
+  const [autoDetectionEnabled, setAutoDetectionEnabled] = useState(true);
+  const [showAutoFallModal, setShowAutoFallModal] = useState(false);
+  const [countdown, setCountdown] = useState(FALL_SENSOR_CONFIG.COUNTDOWN_SECONDS);
+
+  // Refs for timers and active state
+  const countdownTimerRef = useRef(null);
+  const activeAlertRef = useRef(activeAlert);
+  const autoModalOpenRef = useRef(showAutoFallModal);
+
+  useEffect(() => {
+    activeAlertRef.current = activeAlert;
+  }, [activeAlert]);
+
+  useEffect(() => {
+    autoModalOpenRef.current = showAutoFallModal;
+  }, [showAutoFallModal]);
+
+  // Check active alerts and sensor availability on mount
+  const initScreen = useCallback(async () => {
     try {
       const { alerts } = await listAlerts({ status: 'active', limit: 5 });
       const fallAlert = alerts.find((a) => a.alertType === 'fall');
@@ -43,19 +69,72 @@ export function FallDetectionScreen({ navigation }) {
     } finally {
       setCheckingActive(false);
     }
+
+    const { available } = await checkSensorAvailability();
+    setSensorAvailable(available);
   }, []);
 
   useEffect(() => {
-    checkActiveAlert();
-  }, [checkActiveAlert]);
+    initScreen();
+  }, [initScreen]);
 
-  async function handleSendFallAlert() {
-    setShowConfirmModal(false);
+  // Start motion sensor monitoring when auto detection is enabled
+  useEffect(() => {
+    if (!sensorAvailable || !autoDetectionEnabled || activeAlert || showAutoFallModal) {
+      return;
+    }
+
+    const cleanupSensors = startFallDetection(() => {
+      if (!activeAlertRef.current && !autoModalOpenRef.current) {
+        triggerAutoFallCountdown();
+      }
+    });
+
+    return () => {
+      cleanupSensors();
+    };
+  }, [sensorAvailable, autoDetectionEnabled, activeAlert, showAutoFallModal]);
+
+  // Clean up countdown timer on unmount
+  useEffect(() => {
+    return () => {
+      if (countdownTimerRef.current) {
+        clearInterval(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Triggers the 10-second confirmation window countdown modal
+  function triggerAutoFallCountdown() {
+    setStatusBanner(null);
+    setCountdown(FALL_SENSOR_CONFIG.COUNTDOWN_SECONDS);
+    setShowAutoFallModal(true);
+
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+    }
+
+    countdownTimerRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(countdownTimerRef.current);
+          countdownTimerRef.current = null;
+          handleAutoFallTimeout();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  // Automatic timeout handler (user did not respond in 10s)
+  async function handleAutoFallTimeout() {
+    setShowAutoFallModal(false);
     setSubmitting(true);
     setError(null);
 
     try {
-      // Capture GPS location best-effort with quick timeout
       let location = null;
       try {
         const locResult = await captureCurrentLocation();
@@ -63,11 +142,69 @@ export function FallDetectionScreen({ navigation }) {
           location = { latitude: locResult.latitude, longitude: locResult.longitude };
         }
       } catch {
-        // Location failure does not stop alert creation
+        // Location failure does not block alert
       }
 
-      const { alert } = await createFallAlert(location);
+      const { alert } = await createFallAlert(
+        location,
+        'Automatic Fall Alert: Motion sensors detected a fall and 10-second countdown expired without response.'
+      );
       setActiveAlert(alert);
+      setStatusBanner('Emergency fall alert sent automatically.');
+    } catch (err) {
+      if (err.code === 'fall_already_active' && err.alert) {
+        setActiveAlert(err.alert);
+      } else {
+        setError(err.message || 'Unable to send automatic fall alert.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // User taps "I'M OK" on automatic fall countdown modal
+  function handleImOk() {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    setShowAutoFallModal(false);
+    setStatusBanner('Fall alert cancelled — glad you are OK!');
+  }
+
+  // User taps "SEND HELP NOW" on automatic fall countdown modal
+  async function handleSendHelpNow() {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    setShowAutoFallModal(false);
+    await handleSendFallAlert('Automatic Motion-Triggered Fall Alert (User Confirmed Send)');
+  }
+
+  // Manual "I FELL" button submission
+  async function handleSendFallAlert(customMessage) {
+    setShowConfirmModal(false);
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      let location = null;
+      try {
+        const locResult = await captureCurrentLocation();
+        if (locResult?.latitude && locResult?.longitude) {
+          location = { latitude: locResult.latitude, longitude: locResult.longitude };
+        }
+      } catch {
+        // Best effort location
+      }
+
+      const { alert } = await createFallAlert(
+        location,
+        customMessage || 'Manual Fall Alert: User pressed the I FELL emergency button.'
+      );
+      setActiveAlert(alert);
+      setStatusBanner('Emergency fall alert sent successfully.');
     } catch (err) {
       if (err.code === 'fall_already_active' && err.alert) {
         setActiveAlert(err.alert);
@@ -79,12 +216,13 @@ export function FallDetectionScreen({ navigation }) {
     }
   }
 
-  async function handleCancelAlert() {
+  async function handleCancelActiveAlert() {
     if (!activeAlert?.id) return;
     setCancelling(true);
     try {
       await cancelAlert(activeAlert.id, 'User cancelled fall alert');
       setActiveAlert(null);
+      setStatusBanner('Active fall alert resolved.');
     } catch (err) {
       setError(err.message || 'Could not cancel alert.');
     } finally {
@@ -96,7 +234,7 @@ export function FallDetectionScreen({ navigation }) {
     return (
       <SafeAreaView style={styles.centerSafe}>
         <ActivityIndicator size="large" color={colors.danger} />
-        <Text style={styles.loadingText}>Checking emergency status...</Text>
+        <Text style={styles.loadingText}>Loading fall protection status...</Text>
       </SafeAreaView>
     );
   }
@@ -104,11 +242,18 @@ export function FallDetectionScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Header */}
+        {/* Screen Header */}
         <View style={styles.header}>
           <Text style={styles.title}>Fall Detection</Text>
-          <Text style={styles.subtitle}>Manual Emergency Fall Alert Trigger</Text>
+          <Text style={styles.subtitle}>Automatic + Manual Emergency Protection</Text>
         </View>
+
+        {/* Status / Success Banner */}
+        {statusBanner ? (
+          <View style={styles.statusBanner}>
+            <Text style={styles.statusBannerText}>{statusBanner}</Text>
+          </View>
+        ) : null}
 
         {/* Error Banner */}
         {error ? (
@@ -144,10 +289,10 @@ export function FallDetectionScreen({ navigation }) {
                 pressed && styles.cancelButtonPressed,
                 cancelling && styles.buttonDisabled,
               ]}
-              onPress={handleCancelAlert}
+              onPress={handleCancelActiveAlert}
               disabled={cancelling}
               accessibilityRole="button"
-              accessibilityLabel="Cancel fall alert"
+              accessibilityLabel="Cancel active fall alert"
             >
               {cancelling ? (
                 <ActivityIndicator size="small" color={colors.text} />
@@ -157,11 +302,43 @@ export function FallDetectionScreen({ navigation }) {
             </Pressable>
           </View>
         ) : (
-          /* Normal Trigger View */
+          /* Normal Protection View */
           <View style={styles.triggerContainer}>
-            <Text style={styles.instructionText}>
-              If you have fallen and need help, press the button below. An emergency alert will be sent immediately to your emergency contacts.
-            </Text>
+            {/* Automatic Motion Protection Card */}
+            <View style={styles.autoCard}>
+              <View style={styles.autoCardHeader}>
+                <View style={styles.autoTitleGroup}>
+                  <Text style={styles.autoCardIcon}>📱</Text>
+                  <Text style={styles.autoCardTitle}>Automatic Motion Monitor</Text>
+                </View>
+
+                {sensorAvailable ? (
+                  <Switch
+                    value={autoDetectionEnabled}
+                    onValueChange={setAutoDetectionEnabled}
+                    trackColor={{ false: '#D1D5DB', true: '#BFDBFE' }}
+                    thumbColor={autoDetectionEnabled ? colors.primary : '#9CA3AF'}
+                    accessibilityLabel="Toggle automatic fall detection motion monitor"
+                  />
+                ) : null}
+              </View>
+
+              <View style={styles.statusPillBox}>
+                <Text style={styles.autoCardStatusPill}>
+                  {sensorAvailable
+                    ? autoDetectionEnabled
+                      ? '🟢 ACTIVE (Monitoring Motion)'
+                      : '🟡 PAUSED'
+                    : '⚠️ SENSORS UNAVAILABLE'}
+                </Text>
+              </View>
+
+              <Text style={styles.autoCardDesc}>
+                {sensorAvailable
+                  ? 'Your phone continuously monitors motion for possible falls. If an unusual fall is detected, a 10-second confirmation window starts before requesting emergency help.'
+                  : 'Automatic motion sensors are unavailable on this device. Use the manual emergency button below.'}
+              </Text>
+            </View>
 
             {/* Primary "I FELL" Action Button */}
             <Pressable
@@ -173,7 +350,7 @@ export function FallDetectionScreen({ navigation }) {
               onPress={() => setShowConfirmModal(true)}
               disabled={submitting}
               accessibilityRole="button"
-              accessibilityLabel="I fell. Tap to request emergency assistance."
+              accessibilityLabel="Manually report that I have fallen. Tap for emergency help."
             >
               {submitting ? (
                 <View style={styles.submittingContainer}>
@@ -190,17 +367,20 @@ export function FallDetectionScreen({ navigation }) {
             </Pressable>
 
             <Text style={styles.disclaimerText}>
-              Note: This is a manual fall alert button. Tap to notify your emergency contacts and care team.
+              Note: The I FELL button is your direct manual emergency trigger. Tap to notify your contacts immediately.
             </Text>
           </View>
         )}
 
-        {/* Shortcuts Section */}
+        {/* Other Emergency Options */}
         <View style={styles.shortcutsSection}>
           <Text style={styles.shortcutsTitle}>Other Emergency Options</Text>
 
           <Pressable
-            style={styles.shortcutButton}
+            style={({ pressed }) => [
+              styles.shortcutButton,
+              pressed && styles.shortcutButtonPressed,
+            ]}
             onPress={() => navigation.navigate('AmbulanceBooking')}
             accessibilityRole="button"
           >
@@ -208,7 +388,10 @@ export function FallDetectionScreen({ navigation }) {
           </Pressable>
 
           <Pressable
-            style={styles.shortcutButton}
+            style={({ pressed }) => [
+              styles.shortcutButton,
+              pressed && styles.shortcutButtonPressed,
+            ]}
             onPress={() => navigation.navigate('ResponseCenter')}
             accessibilityRole="button"
           >
@@ -217,7 +400,59 @@ export function FallDetectionScreen({ navigation }) {
         </View>
       </ScrollView>
 
-      {/* Confirmation Modal */}
+      {/* 10-Second Automatic Fall Confirmation Countdown Modal */}
+      <Modal
+        visible={showAutoFallModal}
+        transparent
+        animationType="fade"
+        onRequestClose={handleImOk}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalBox, styles.autoModalBox]}>
+            <Text style={styles.autoModalWarnIcon}>⚠️</Text>
+            <Text style={styles.autoModalTitle}>POSSIBLE FALL DETECTED</Text>
+            <Text style={styles.autoModalSubtitle}>Are you okay?</Text>
+
+            <Text style={styles.autoModalBody}>
+              We detected unusual phone movement. Emergency assistance will be contacted automatically if you do not respond.
+            </Text>
+
+            {/* Countdown Display */}
+            <View style={styles.countdownContainer}>
+              <Text style={styles.countdownNumber}>{countdown}</Text>
+              <Text style={styles.countdownLabel}>seconds remaining</Text>
+            </View>
+
+            <View style={styles.autoModalActions}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.imOkButton,
+                  pressed && styles.imOkButtonPressed,
+                ]}
+                onPress={handleImOk}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel automatic emergency fall alert. I'm OK."
+              >
+                <Text style={styles.imOkButtonText}>I'M OK</Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.sendHelpButton,
+                  pressed && styles.sendHelpButtonPressed,
+                ]}
+                onPress={handleSendHelpNow}
+                accessibilityRole="button"
+                accessibilityLabel="Send emergency fall alert now"
+              >
+                <Text style={styles.sendHelpButtonText}>SEND HELP NOW</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Manual "I FELL" Confirmation Modal */}
       <Modal
         visible={showConfirmModal}
         transparent
@@ -234,7 +469,10 @@ export function FallDetectionScreen({ navigation }) {
 
             <View style={styles.modalActions}>
               <Pressable
-                style={styles.modalCancelButton}
+                style={({ pressed }) => [
+                  styles.modalCancelButton,
+                  pressed && styles.modalCancelButtonPressed,
+                ]}
                 onPress={() => setShowConfirmModal(false)}
                 accessibilityRole="button"
                 accessibilityLabel="Cancel fall alert"
@@ -243,8 +481,11 @@ export function FallDetectionScreen({ navigation }) {
               </Pressable>
 
               <Pressable
-                style={styles.modalConfirmButton}
-                onPress={handleSendFallAlert}
+                style={({ pressed }) => [
+                  styles.modalConfirmButton,
+                  pressed && styles.modalConfirmButtonPressed,
+                ]}
+                onPress={() => handleSendFallAlert()}
                 accessibilityRole="button"
                 accessibilityLabel="Confirm send emergency fall alert"
               >
@@ -295,11 +536,24 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
   },
+  statusBanner: {
+    backgroundColor: '#D1FAE5',
+    borderWidth: 1.5,
+    borderColor: colors.success,
+    borderRadius: 12,
+    padding: spacing.md,
+  },
+  statusBannerText: {
+    color: '#065F46',
+    fontSize: type.body - 1,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   errorBanner: {
     backgroundColor: '#FEE2E2',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.danger,
-    borderRadius: 10,
+    borderRadius: 12,
     padding: spacing.md,
   },
   errorText: {
@@ -312,12 +566,55 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.lg,
   },
-  instructionText: {
-    fontSize: type.body,
+  autoCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: spacing.lg,
+    borderWidth: 1.5,
+    borderColor: '#2563EB',
+    width: '100%',
+    gap: spacing.sm,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  autoCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  autoTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  autoCardIcon: {
+    fontSize: 24,
+  },
+  autoCardTitle: {
+    fontSize: type.heading - 2,
+    fontWeight: '800',
     color: colors.text,
-    textAlign: 'center',
-    lineHeight: 24,
-    maxWidth: 320,
+  },
+  statusPillBox: {
+    alignSelf: 'flex-start',
+  },
+  autoCardStatusPill: {
+    fontSize: type.small + 1,
+    fontWeight: '800',
+    color: colors.primary,
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  autoCardDesc: {
+    fontSize: type.small + 1,
+    color: colors.textMuted,
+    lineHeight: 21,
   },
   fellButton: {
     backgroundColor: colors.danger,
@@ -327,22 +624,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: colors.danger,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 6,
+    shadowRadius: 10,
+    elevation: 8,
     padding: spacing.md,
+    marginVertical: spacing.xs,
   },
   fellButtonPressed: {
     backgroundColor: '#991B1B',
+    transform: [{ scale: 0.97 }],
   },
   fellButtonIcon: {
-    fontSize: 42,
+    fontSize: 44,
     marginBottom: 2,
   },
   fellButtonText: {
     color: '#FFFFFF',
-    fontSize: 32,
+    fontSize: 34,
     fontWeight: '900',
     letterSpacing: 1.5,
   },
@@ -369,16 +668,21 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
     fontStyle: 'italic',
-    maxWidth: 300,
+    maxWidth: 320,
   },
   activeCard: {
     backgroundColor: colors.surface,
-    borderRadius: 16,
+    borderRadius: 18,
     padding: spacing.lg,
     borderWidth: 2,
     borderColor: colors.danger,
     alignItems: 'center',
     gap: spacing.md,
+    shadowColor: colors.danger,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
   },
   activeCardIcon: {
     fontSize: 48,
@@ -397,7 +701,7 @@ const styles = StyleSheet.create({
   },
   activeDetailsBox: {
     backgroundColor: '#FEF2F2',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: spacing.md,
     width: '100%',
     gap: spacing.xs,
@@ -409,8 +713,8 @@ const styles = StyleSheet.create({
   },
   cancelButton: {
     backgroundColor: colors.border,
-    borderRadius: 10,
-    paddingVertical: 12,
+    borderRadius: 12,
+    paddingVertical: 14,
     paddingHorizontal: spacing.lg,
     width: '100%',
     alignItems: 'center',
@@ -436,10 +740,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1.5,
     borderColor: colors.border,
-    borderRadius: 12,
-    paddingVertical: 14,
+    borderRadius: 14,
+    paddingVertical: 15,
     paddingHorizontal: spacing.md,
     alignItems: 'center',
+  },
+  shortcutButtonPressed: {
+    backgroundColor: colors.background,
   },
   shortcutText: {
     fontSize: type.body - 1,
@@ -448,22 +755,115 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.65)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: spacing.lg,
   },
   modalBox: {
     backgroundColor: colors.surface,
-    borderRadius: 18,
+    borderRadius: 20,
     padding: spacing.lg,
     width: '100%',
     maxWidth: 340,
     alignItems: 'center',
     gap: spacing.sm,
   },
+  autoModalBox: {
+    borderWidth: 3,
+    borderColor: colors.danger,
+    padding: spacing.xl,
+  },
+  autoModalWarnIcon: {
+    fontSize: 52,
+  },
+  autoModalTitle: {
+    fontSize: type.heading + 2,
+    fontWeight: '900',
+    color: colors.danger,
+    textAlign: 'center',
+    letterSpacing: 0.5,
+  },
+  autoModalSubtitle: {
+    fontSize: type.heading - 1,
+    fontWeight: '800',
+    color: colors.text,
+    textAlign: 'center',
+  },
+  autoModalBody: {
+    fontSize: type.body - 1,
+    color: colors.text,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginVertical: 4,
+  },
+  countdownContainer: {
+    alignItems: 'center',
+    marginVertical: spacing.sm,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 18,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    width: '100%',
+    borderWidth: 2,
+    borderColor: colors.danger,
+  },
+  countdownNumber: {
+    fontSize: 58,
+    fontWeight: '900',
+    color: colors.danger,
+  },
+  countdownLabel: {
+    fontSize: type.small,
+    color: colors.textMuted,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  autoModalActions: {
+    gap: spacing.md,
+    width: '100%',
+    marginTop: spacing.xs,
+  },
+  imOkButton: {
+    backgroundColor: colors.success,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.success,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  imOkButtonPressed: {
+    backgroundColor: '#047857',
+  },
+  imOkButtonText: {
+    fontSize: type.body + 2,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 1,
+  },
+  sendHelpButton: {
+    backgroundColor: colors.danger,
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendHelpButtonPressed: {
+    backgroundColor: '#991B1B',
+  },
+  sendHelpButtonText: {
+    fontSize: type.body,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
   modalIcon: {
-    fontSize: 40,
+    fontSize: 44,
   },
   modalTitle: {
     fontSize: type.heading,
@@ -486,9 +886,12 @@ const styles = StyleSheet.create({
   modalCancelButton: {
     flex: 1,
     backgroundColor: colors.border,
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingVertical: 14,
+    borderRadius: 12,
     alignItems: 'center',
+  },
+  modalCancelButtonPressed: {
+    backgroundColor: '#D1D5DB',
   },
   modalCancelText: {
     fontSize: type.body - 1,
@@ -498,9 +901,12 @@ const styles = StyleSheet.create({
   modalConfirmButton: {
     flex: 1,
     backgroundColor: colors.danger,
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingVertical: 14,
+    borderRadius: 12,
     alignItems: 'center',
+  },
+  modalConfirmButtonPressed: {
+    backgroundColor: '#991B1B',
   },
   modalConfirmText: {
     fontSize: type.small + 1,

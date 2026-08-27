@@ -363,9 +363,9 @@ export function ElderlyHomeScreen({ navigation }) {
                 ]}
                 onPress={() => navigation.navigate('FallDetection')}
                 accessibilityRole="button"
-                accessibilityLabel="Manual fall detection trigger"
+                accessibilityLabel="Hybrid fall detection automatic motion monitor and manual trigger"
               >
-                <Text style={styles.fallCardText}>🍂 Fall Detection ("I Fell")</Text>
+                <Text style={styles.fallCardText}>🍂 Hybrid Fall Detection ("I Fell")</Text>
               </Pressable>
               <LocationSharingCard
                 permission={locationPermission}
