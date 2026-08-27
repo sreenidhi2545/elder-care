@@ -64,7 +64,12 @@ const SOS_LOCATION_TIMEOUT_MS = 4500;
 // Measured from the same start point as SOS_LOCATION_TIMEOUT_MS (countdown
 // start, i.e. SOS press) — never delays the send itself, only how long the
 // async attach in fireSos keeps a late fix worth PATCHing onto the alert.
-const SOS_LOCATION_ASYNC_CEILING_MS = 25_000;
+//
+// 45s, not the original 25s: sized for Accuracy.High's slower cold-start
+// time-to-first-fix (captureLocation.js's beginSosLocationCapture now
+// requests High for this path specifically), not Balanced's. Unmeasured
+// against real device timing yet — see BUILD_LOG.md, 2026-08-27.
+const SOS_LOCATION_ASYNC_CEILING_MS = 45_000;
 
 export function ElderlyHomeScreen({ navigation }) {
   const { user, signOut } = useAuth();

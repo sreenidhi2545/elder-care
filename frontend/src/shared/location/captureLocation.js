@@ -46,13 +46,17 @@ export async function requestLocationPermission() {
  * captureCurrentLocation so a caller that needs to keep observing past a
  * timeout (the SOS async-attach path — see ElderlyHomeScreen) can hold onto
  * this same promise instead of it being discarded inside a Promise.race.
+ *
+ * `accuracy` defaults to Balanced (~100m) — every caller except
+ * beginSosLocationCapture uses this default. See BUILD_LOG.md, 2026-08-27,
+ * for why the SOS path alone requests High instead.
  */
-async function readPosition() {
+async function readPosition(accuracy = Location.Accuracy.Balanced) {
   try {
     const status = await getLocationPermissionStatus();
     if (status !== 'granted') return null;
 
-    const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    const position = await Location.getCurrentPositionAsync({ accuracy });
     const batteryLevel = await Battery.getBatteryLevelAsync().catch(() => null);
 
     return {
@@ -92,9 +96,15 @@ export async function captureCurrentLocation({ timeoutMs = 8000 } = {}) {
  * ElderlyHomeScreen). The read is started exactly once; `settled` racing it
  * against a timeout does not stop `full` from eventually resolving to
  * whatever `readPosition` returns.
+ *
+ * `accuracy` defaults to High (~10m), not Balanced (~100m) — safe only
+ * because `timeoutMs` (the send gate) was never a function of accuracy tier
+ * to begin with; High's slower time-to-first-fix costs nothing there and
+ * only affects how long the async attach keeps watching for an upgrade. See
+ * BUILD_LOG.md, 2026-08-27.
  */
-export function beginSosLocationCapture({ timeoutMs = 4500 } = {}) {
-  const full = readPosition();
+export function beginSosLocationCapture({ timeoutMs = 4500, accuracy = Location.Accuracy.High } = {}) {
+  const full = readPosition(accuracy);
   const timeout = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs));
   return { settled: Promise.race([full, timeout]), full };
 }

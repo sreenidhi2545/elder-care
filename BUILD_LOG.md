@@ -951,3 +951,46 @@ to the `plugins` array. Verified against Expo's own tooling, not just re-read as
 ### Not yet run
 
 No preview build has been produced against this fix yet. Given the last two entries in this log each assumed a fix worked and were wrong, the next build needs a real download-and-inspect check of its APK (bundle URL, manifest attribute) before calling it done, not just a device test — the device test alone is what looked like success right up until "unable to connect" showed up anyway.
+
+---
+
+## 2026-08-27 — SOS accuracy reconsidered: `Accuracy.High` for the SOS capture path only (proposed, not yet implemented)
+
+**Live confirmation the async-attach mechanism (024b660, entry above) works end to end on a real device.** An SOS at 22:08 landed a fresh fix six seconds before `triggered_at`: `location_is_approximate = false`, `location_captured_at` set, the `PATCH /emergency/alerts/:id/location` path exercised for real, not just verified from a bundle/manifest download as the last several entries had to settle for.
+
+**But the position is materially wrong on the map, and `location_accuracy_meters = 100.00` exactly.** Matches the flat-bucket finding from the 2026-08-26 entry above, now with the actual mechanism confirmed. Checked `node_modules/expo-location`'s own type definitions this time rather than inferring from the live number alone: the `LocationAccuracy` enum documents `Balanced` as "*accurate to within one hundred meters*" and `High` as "*accurate to within ten meters of the desired target*" — `100.00` isn't a bug or a coincidence, it's Android reporting back exactly the ceiling `Balanced` asks for. `captureLocation.js`'s `readPosition()` has requested `Location.Accuracy.Balanced` unconditionally since Phase 1 step 2, inherited into `beginSosLocationCapture` on 026b660 without being reconsidered — SOS capture has never once asked the OS for better than 100m.
+
+### Why `Balanced` was the right call on 2026-08-26, and why that no longer holds
+
+At the time of the 44%-NULL entry, the only capture path was a single `Promise.race` inside the 4.5-second send window — a fix that hadn't landed by then was discarded outright, no second chance. Forcing `Accuracy.High` (slower time-to-first-fix, since GPS-grade lock takes longer to acquire than a network/cell/Wi-Fi fused `Balanced` reading) under that hard ceiling would have raised the NULL rate, not lowered it — trading a coarse-but-present reading for a better-but-frequently-absent one is a worse trade for an emergency alert. Staying `Balanced` was the correct call against that constraint.
+
+**That entry's own fix removed the constraint it was reasoned against, without the accuracy tier itself being revisited.** `beginSosLocationCapture`'s `full` read already keeps running past the 4.5s send gate, up to `SOS_LOCATION_ASYNC_CEILING_MS`, independent of what accuracy tier it requests — the send is never gated on accuracy already, only on time. `Accuracy.High`'s slower TTFF now costs nothing at send time (the alert fires at 4.5s regardless, on whatever's settled — fresh fix or last-known floor) and only affects how long the async attach keeps watching before giving up on an upgrade. The original objection was sound against the architecture that existed when it was made; it stopped applying the same day the async-attach path shipped, and nobody came back to check.
+
+### Proposed change — `captureLocation.js`
+
+`readPosition()` gains an `accuracy` parameter, defaulting to `Location.Accuracy.Balanced` (unchanged behavior for every existing caller). `beginSosLocationCapture({ timeoutMs, accuracy = Location.Accuracy.High })` passes `Location.Accuracy.High` as its own default — SOS-only, since this function has no other caller. `captureCurrentLocation` (mount-time "Location sharing" card, `FallDetectionScreen.js`, `AmbulanceBookingScreen.js`) and `backgroundLocationTask.js`'s continuous tracking are untouched — still `Balanced`, still Balanced's own justification (battery cost of *continuous, all-day* sampling — see the 2026-08-16 entry — which is a real tradeoff that a one-shot SOS request doesn't share). `captureLastKnownLocation()` is unaffected either way — `getLastKnownPositionAsync` has no accuracy parameter; the cached fix it returns carries whatever accuracy it was originally captured at.
+
+### Timing — `SOS_LOCATION_TIMEOUT_MS` stays at 4500; `SOS_LOCATION_ASYNC_CEILING_MS` should move from 25,000 to something larger, proposed 45,000
+
+**4.5s send gate: unchanged, and not up for reconsideration by this change.** It was never a function of accuracy tier — it's the "the alert must never wait on GPS" product constraint, enforced by racing the countdown regardless of what `readPosition` asks the OS for. Nothing about switching to `High` touches this number.
+
+**25s async ceiling: was sized against `Balanced`'s typical settle time, not `High`'s.** `Accuracy.High` on Android still uses the fused provider — it is not GPS-only, and does not disable Wi-Fi/cell signals — but it prioritizes holding out for a GPS-grade lock, and cold-start GPS time-to-first-fix with A-GPS assistance commonly runs 5–30s under open sky, and can exceed that in marginal signal (partial sky view, near buildings). 25s risks cutting off a meaningful share of fixes that would have landed at 30–40s and gotten nothing instead — the exact failure mode this whole mechanism exists to reduce. Proposing 45,000ms as a middle ground: covers the bulk of realistic outdoor `High` fixes without holding the async attach open indefinitely for a fix that was never going to resolve. This is a judgment call, not a measured number — no live `High`-accuracy timing data exists yet on this device; worth confirming empirically after the change ships rather than treating 45s as final.
+
+### Battery cost — honestly, not a real tradeoff here
+
+A single `High`-accuracy one-shot request, bounded by the (proposed) 45s ceiling, draws GPS power only for that window, only when SOS is actually pressed — a rare event, not routine. Even at the high end of GPS active-acquisition power draw, 45 seconds of it is a rounding error against a phone's daily battery budget, nowhere close to a cost worth trading location accuracy against for an emergency alert. Worth flagging honestly: the 2026-08-16 background-tracking entry justified `Balanced` for SOS capture partly by analogy to background tracking's *own* battery reasoning ("it's the same accuracy SOS-time capture already uses, for the same reason") — but that analogy was weak even then. Background tracking's battery cost is real because it recurs continuously, all day, thousands of samples; SOS capture is one-shot and rare. The two were never actually the same tradeoff, and this change stops treating them as one.
+
+### Indoors, where GPS can't resolve at all
+
+Two separate things stay unaffected by this change:
+
+1. **The 4.5s send-time last-known-position fallback (`captureLastKnownLocation`) is a completely separate code path** — no radio use, doesn't touch `readPosition` or its accuracy setting at all. Indoors, a fresh fix (of any accuracy tier) very rarely lands within 4.5s; the alert still sends with whatever cached position the OS has, marked `isApproximate: true`, exactly as today.
+2. **`Accuracy.High` does not mean GPS-only.** Android's fused provider still blends network/Wi-Fi signals under `High` priority — it asks for GPS-grade accuracy when achievable, it doesn't refuse a network-derived estimate when GPS can't lock. So indoors, where GPS characteristically can't resolve regardless of the accuracy setting requested, the async-attach path should degrade toward roughly the same behavior `Balanced` has today, not meaningfully worse.
+
+**Flagged rather than asserted as certain, per this log's own standing rule of checking live evidence instead of assuming it:** exactly how quickly Android's fused provider hands back a network-derived estimate under `High` priority when GPS can't lock — versus how readily it does the same under `Balanced` — is Android/OEM implementation behavior neither `expo-location`'s types nor this codebase document, and nothing here has tested it. Worth a deliberate indoor SOS test after this ships, alongside the outdoor timing check above, rather than assuming parity with `Balanced` indoors.
+
+The one true residual gap — no cached position exists at all *and* nothing resolves within the ceiling (first-ever app use, indoors, no network-derived signal either) — predates this change and isn't touched by it either way.
+
+### Not yet run
+
+**No code has been changed.** This entry documents the proposed change and its reasoning, put here before implementation per the same "evidence and reasoning before claiming done" discipline as every other entry in this log. Once `captureLocation.js` is edited, this needs: a preview build, an outdoor SOS test comparing `location_accuracy_meters` against the current 100.00 baseline and confirming the position lands correctly on the map, an indoor SOS test confirming the last-known-floor and async-attach behavior described above, and a rough measurement of how long real `High`-accuracy fixes actually take on this device outdoors — to confirm or correct the proposed 45s ceiling rather than leaving it as an untested guess.
