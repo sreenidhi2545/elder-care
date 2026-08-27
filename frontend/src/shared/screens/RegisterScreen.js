@@ -1,8 +1,8 @@
 // ============================================================================
 // Registration screen — ElderCare
 //
-// Simple, accessible registration flow tailored for elderly users.
-// Phone number is the primary identity. Role defaults to 'elderly'.
+// Simple, accessible registration flow tailored for elderly, family, and caregiver users.
+// Allows users to select their account type ('elderly', 'family', 'caregiver').
 // Handover to AuthContext.signIn() on success, which stores tokens and
 // triggers role-based routing automatically.
 // ============================================================================
@@ -25,12 +25,34 @@ import { register } from '../api/auth';
 import { useAuth } from '../auth/AuthContext';
 import { colors, spacing, type } from '../ui/theme';
 
+const ROLE_OPTIONS = [
+  {
+    key: 'elderly',
+    label: 'Elderly User',
+    description: 'For seniors using ElderCare for emergency help & safety',
+    icon: '👴',
+  },
+  {
+    key: 'family',
+    label: 'Family Member',
+    description: 'For family members supporting & monitoring an elderly relative',
+    icon: '👨‍👩‍👧',
+  },
+  {
+    key: 'caregiver',
+    label: 'Professional Caregiver',
+    description: 'For professional caregivers delivering assistance & care plans',
+    icon: '🩺',
+  },
+];
+
 export function RegisterScreen({ navigation }) {
   const { signIn } = useAuth();
 
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [selectedRole, setSelectedRole] = useState('elderly');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -47,6 +69,9 @@ export function RegisterScreen({ navigation }) {
     }
     if (!phone.trim()) {
       errs.phone = 'Please enter your phone number.';
+    }
+    if (!selectedRole) {
+      errs.role = 'Please select an account type.';
     }
     if (!password) {
       errs.password = 'Please enter a password.';
@@ -83,7 +108,7 @@ export function RegisterScreen({ navigation }) {
         fullName: fullName.trim(),
         phone: phone.trim(),
         password,
-        role: 'elderly', // Defaults to elderly for simple app setup
+        role: selectedRole,
       };
 
       if (email.trim()) {
@@ -97,6 +122,8 @@ export function RegisterScreen({ navigation }) {
         setError('Unable to connect to the server. Please check your connection and try again.');
       } else if (err.code === 'account_exists') {
         setError('An account with this phone number or email already exists.');
+      } else if (err.code === 'role_not_self_assignable') {
+        setError('The selected role is not permitted for public registration.');
       } else if (err.code === 'validation_failed' && Array.isArray(err.details)) {
         const mappedErrs = {};
         err.details.forEach((item) => {
@@ -185,7 +212,7 @@ export function RegisterScreen({ navigation }) {
               ) : null}
             </View>
 
-            {/* Email (Optional) */}
+            {/* Email Address (Optional) */}
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email Address (Optional)</Text>
               <TextInput
@@ -201,6 +228,48 @@ export function RegisterScreen({ navigation }) {
               />
               {fieldErrors.email ? (
                 <Text style={styles.fieldErrorText}>{fieldErrors.email}</Text>
+              ) : null}
+            </View>
+
+            {/* Account Type / Role Selector */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Account Type *</Text>
+              <Text style={styles.roleSubtext}>Select the role that best describes how you will use ElderCare:</Text>
+
+              <View style={styles.roleSelectorList} accessibilityRole="radiogroup" accessibilityLabel="Account Type Selection">
+                {ROLE_OPTIONS.map((option) => {
+                  const isSelected = selectedRole === option.key;
+                  return (
+                    <Pressable
+                      key={option.key}
+                      style={({ pressed }) => [
+                        styles.roleOptionCard,
+                        isSelected && styles.roleOptionCardSelected,
+                        pressed && styles.roleOptionCardPressed,
+                      ]}
+                      onPress={() => setSelectedRole(option.key)}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: isSelected }}
+                      accessibilityLabel={`${option.label}. ${option.description}`}
+                    >
+                      <View style={styles.roleCardIconBox}>
+                        <Text style={styles.roleCardIcon}>{option.icon}</Text>
+                      </View>
+                      <View style={styles.roleCardContent}>
+                        <Text style={[styles.roleCardTitle, isSelected && styles.roleCardTitleSelected]}>
+                          {option.label}
+                        </Text>
+                        <Text style={styles.roleCardDesc}>{option.description}</Text>
+                      </View>
+                      <View style={[styles.radioButton, isSelected && styles.radioButtonSelected]}>
+                        {isSelected ? <View style={styles.radioButtonInner} /> : null}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {fieldErrors.role ? (
+                <Text style={styles.fieldErrorText}>{fieldErrors.role}</Text>
               ) : null}
             </View>
 
@@ -224,12 +293,12 @@ export function RegisterScreen({ navigation }) {
                   accessibilityLabel="Password"
                 />
                 <Pressable
-                  style={styles.toggleButton}
+                  style={styles.showButton}
                   onPress={() => setShowPassword((prev) => !prev)}
                   accessibilityRole="button"
                   accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
                 >
-                  <Text style={styles.toggleText}>{showPassword ? 'Hide' : 'Show'}</Text>
+                  <Text style={styles.showButtonText}>{showPassword ? 'Hide' : 'Show'}</Text>
                 </Pressable>
               </View>
               {fieldErrors.password ? (
@@ -254,17 +323,17 @@ export function RegisterScreen({ navigation }) {
                   secureTextEntry={!showConfirmPassword}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  accessibilityLabel="Confirm Password"
+                  accessibilityLabel="Confirm password"
                 />
                 <Pressable
-                  style={styles.toggleButton}
+                  style={styles.showButton}
                   onPress={() => setShowConfirmPassword((prev) => !prev)}
                   accessibilityRole="button"
                   accessibilityLabel={
                     showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'
                   }
                 >
-                  <Text style={styles.toggleText}>{showConfirmPassword ? 'Hide' : 'Show'}</Text>
+                  <Text style={styles.showButtonText}>{showConfirmPassword ? 'Hide' : 'Show'}</Text>
                 </Pressable>
               </View>
               {fieldErrors.confirmPassword ? (
@@ -272,36 +341,35 @@ export function RegisterScreen({ navigation }) {
               ) : null}
             </View>
 
-            {/* Create Account Button */}
+            {/* Submit Button */}
             <Pressable
               style={({ pressed }) => [
                 styles.submitButton,
-                busy ? styles.submitButtonDisabled : null,
-                pressed && !busy ? styles.submitButtonPressed : null,
+                pressed && styles.submitButtonPressed,
+                busy && styles.submitButtonDisabled,
               ]}
               onPress={handleRegister}
               disabled={busy}
               accessibilityRole="button"
-              accessibilityLabel="Create an ElderCare account"
+              accessibilityLabel="Create account"
             >
               {busy ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
+                <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
                 <Text style={styles.submitButtonText}>Create Account</Text>
               )}
             </Pressable>
           </View>
 
-          {/* Navigation to Login */}
+          {/* Footer Link */}
           <View style={styles.footer}>
-            <Text style={styles.footerText}>Already have an account?</Text>
+            <Text style={styles.footerText}>Already have an account? </Text>
             <Pressable
               onPress={() => navigation.navigate('Login')}
               accessibilityRole="button"
-              accessibilityLabel="Go to sign in"
-              hitSlop={12}
+              accessibilityLabel="Sign in to existing account"
             >
-              <Text style={styles.loginLink}> Sign In</Text>
+              <Text style={styles.loginLink}>Sign In</Text>
             </Pressable>
           </View>
         </ScrollView>
@@ -320,29 +388,29 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    flexGrow: 1,
+    paddingVertical: spacing.xl,
     justifyContent: 'center',
+    minHeight: '100%',
   },
   header: {
     alignItems: 'center',
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xl,
   },
   brandTitle: {
-    fontSize: type.title + 2,
-    fontWeight: '800',
+    fontSize: type.title + 6,
+    fontWeight: '900',
     color: colors.primary,
-    letterSpacing: 0.5,
-    marginBottom: spacing.sm,
+    letterSpacing: -0.5,
+    marginBottom: spacing.xs,
   },
   headerTitle: {
     fontSize: type.heading,
-    fontWeight: '700',
+    fontWeight: '800',
     color: colors.text,
     marginBottom: 4,
   },
   subtitle: {
-    fontSize: type.body,
+    fontSize: type.body - 1,
     color: colors.textMuted,
     textAlign: 'center',
   },
@@ -350,9 +418,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FEE2E2',
     borderWidth: 1,
     borderColor: colors.danger,
-    borderRadius: 10,
+    borderRadius: 12,
     padding: spacing.md,
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
   },
   errorText: {
     color: colors.danger,
@@ -361,26 +429,97 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   form: {
-    gap: spacing.md,
+    gap: spacing.lg,
   },
   inputGroup: {
-    gap: 6,
+    gap: spacing.xs,
   },
   label: {
-    fontSize: type.body,
-    fontWeight: '600',
+    fontSize: type.body - 1,
+    fontWeight: '700',
     color: colors.text,
+  },
+  roleSubtext: {
+    fontSize: type.small,
+    color: colors.textMuted,
+    marginBottom: 4,
+  },
+  roleSelectorList: {
+    gap: spacing.sm,
+    marginTop: 4,
+  },
+  roleOptionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: 14,
+    padding: spacing.md,
+    gap: spacing.md,
+  },
+  roleOptionCardSelected: {
+    borderColor: colors.primary,
+    backgroundColor: '#EFF6FF',
+  },
+  roleOptionCardPressed: {
+    backgroundColor: '#DBEAFE',
+  },
+  roleCardIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roleCardIcon: {
+    fontSize: 22,
+  },
+  roleCardContent: {
+    flex: 1,
+  },
+  roleCardTitle: {
+    fontSize: type.body,
+    fontWeight: '800',
+    color: colors.text,
+    marginBottom: 2,
+  },
+  roleCardTitleSelected: {
+    color: colors.primary,
+  },
+  roleCardDesc: {
+    fontSize: type.small,
+    color: colors.textMuted,
+    lineHeight: 18,
+  },
+  radioButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioButtonSelected: {
+    borderColor: colors.primary,
+  },
+  radioButtonInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.primary,
   },
   input: {
     backgroundColor: colors.surface,
     borderWidth: 1.5,
     borderColor: colors.border,
-    borderRadius: 10,
+    borderRadius: 12,
     paddingHorizontal: spacing.md,
     paddingVertical: 14,
     fontSize: type.body,
     color: colors.text,
-    minHeight: 52,
   },
   inputError: {
     borderColor: colors.danger,
@@ -388,20 +527,20 @@ const styles = StyleSheet.create({
   fieldErrorText: {
     color: colors.danger,
     fontSize: type.small,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   phoneInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing.xs,
   },
   countryBadge: {
-    backgroundColor: colors.border,
+    backgroundColor: '#F3F4F6',
     borderWidth: 1.5,
     borderColor: colors.border,
-    borderTopLeftRadius: 10,
-    borderBottomLeftRadius: 10,
+    borderRadius: 12,
     paddingHorizontal: spacing.md,
-    height: 52,
+    paddingVertical: 14,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -412,26 +551,23 @@ const styles = StyleSheet.create({
   },
   phoneInput: {
     flex: 1,
-    borderTopLeftRadius: 0,
-    borderBottomLeftRadius: 0,
   },
   passwordContainer: {
     position: 'relative',
     justifyContent: 'center',
   },
   passwordInput: {
-    paddingRight: 70,
+    paddingRight: 64,
   },
-  toggleButton: {
+  showButton: {
     position: 'absolute',
-    right: 12,
-    height: '100%',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.sm,
+    right: spacing.md,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
   },
-  toggleText: {
+  showButtonText: {
     fontSize: type.body - 1,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colors.primary,
   },
   submitButton: {
@@ -440,24 +576,23 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 54,
-    marginTop: spacing.sm,
+    marginTop: spacing.md,
     shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  submitButtonDisabled: {
-    opacity: 0.6,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   submitButtonPressed: {
-    opacity: 0.85,
+    backgroundColor: '#1D4ED8',
+  },
+  submitButtonDisabled: {
+    opacity: 0.7,
   },
   submitButtonText: {
     color: '#FFFFFF',
     fontSize: type.body + 1,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   footer: {
     flexDirection: 'row',
@@ -466,12 +601,12 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
   footerText: {
-    fontSize: type.body,
+    fontSize: type.body - 1,
     color: colors.textMuted,
   },
   loginLink: {
-    fontSize: type.body,
-    fontWeight: '700',
+    fontSize: type.body - 1,
+    fontWeight: '800',
     color: colors.primary,
   },
 });

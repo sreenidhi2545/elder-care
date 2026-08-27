@@ -1,25 +1,25 @@
 // ============================================================================
-// Elderly home screen — the SOS button
+// Elderly home screen — SOS & Emergency Assistance Dashboard
 //
-// Phase 1, steps 1-2. One thing on this screen matters: getting help fast. Three
-// states:
-//
-//   idle       — the big SOS button
-//   confirming — a 5-second countdown overlay, cancellable, before anything
-//                is sent. This is what stops a pocket press from ever
-//                reaching the server.
-//   active     — an alert exists on the server; shows that plainly and offers
-//                a way to cancel it, itself behind one confirmation tap.
-//
-// Phase 1, step 2 adds GPS: a "Location sharing" card (permission handling,
-// mount-time capture posted to POST /emergency/locations) and a best-effort
-// capture at SOS press time, sent inline with the alert. Never a
-// precondition — see startCountdown/fireSos below. No notifications yet —
-// that's step 3. See BUILD_LOG.md.
+// Refined, accessible, elderly-friendly dashboard for immediate emergency response.
+// Provides:
+//   1. Prominent circular SOS button with 5-second cancellable countdown overlay.
+//   2. Quick emergency action cards: Ambulance Booking, Hybrid Fall Detection,
+//      24/7 Emergency Response Helpline, and Disaster & Weather Alerts.
+//   3. Non-overlapping location status and continuous tracking card controls.
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Linking,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 
@@ -42,28 +42,21 @@ import { colors, spacing, type } from '../../shared/ui/theme';
 const COUNTDOWN_SECONDS = 5;
 const POLL_ACTIVE_MS = 10_000;
 const POLL_IDLE_MS = 20_000;
-
-// Stays under the 5-second countdown so a location fix never delays sending
-// the alert — by the time the countdown reaches zero, this has already
-// settled (a reading or null), so awaiting it in fireSos adds no wait.
 const SOS_LOCATION_TIMEOUT_MS = 4500;
 
 export function ElderlyHomeScreen({ navigation }) {
   const { user, signOut } = useAuth();
 
-  // 'checking' | 'idle' | 'confirming' | 'sending' | 'active' | 'confirmingCancel' | 'cancelling'
   const [phase, setPhase] = useState('checking');
   const [alert, setAlert] = useState(null);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
-  const [banner, setBanner] = useState(null); // transient, non-scary status line
+  const [banner, setBanner] = useState(null);
   const countdownTimer = useRef(null);
 
-  // 'checking' | 'undetermined' | 'granted' | 'denied'
   const [locationPermission, setLocationPermission] = useState('checking');
   const [locationShared, setLocationShared] = useState(false);
-  const sosLocationRef = useRef(null); // in-flight capture promise during the countdown
+  const sosLocationRef = useRef(null);
 
-  // 'checking' | 'off' | 'enabling' | 'on' | 'foreground_denied' | 'background_denied'
   const [trackingPhase, setTrackingPhase] = useState('checking');
 
   const stopCountdown = useCallback(() => {
@@ -73,12 +66,6 @@ export function ElderlyHomeScreen({ navigation }) {
     }
   }, []);
 
-  // ---------------------------------------------------------------------
-  // Checking for an alert already active — on load, and periodically.
-  // A failure here is never shown as an error: if we cannot tell whether an
-  // alert is active, the safest default is to leave the SOS button available
-  // rather than block someone who may be in a real emergency.
-  // ---------------------------------------------------------------------
   const checkActive = useCallback(async () => {
     try {
       const { alerts } = await listAlerts({ status: 'active', limit: 1 });
@@ -98,8 +85,6 @@ export function ElderlyHomeScreen({ navigation }) {
     checkActive();
   }, [checkActive]);
 
-  // Poll faster while an alert is active than while idle — an open emergency
-  // is worth checking on more often (e.g. a family member resolved it).
   useEffect(() => {
     if (phase !== 'idle' && phase !== 'active') return;
     const intervalMs = phase === 'active' ? POLL_ACTIVE_MS : POLL_IDLE_MS;
@@ -109,12 +94,6 @@ export function ElderlyHomeScreen({ navigation }) {
 
   useEffect(() => stopCountdown, [stopCountdown]);
 
-  // ---------------------------------------------------------------------
-  // Location sharing — foreground, one-shot on mount if already granted.
-  // No background/periodic tracking here; that's continuous live location,
-  // which is Phase 3's job (and needs a dev build Expo Go can't provide —
-  // see BUILD_LOG.md's open issues).
-  // ---------------------------------------------------------------------
   useEffect(() => {
     (async () => {
       const status = await getLocationPermissionStatus();
@@ -132,8 +111,7 @@ export function ElderlyHomeScreen({ navigation }) {
       await recordLocation(location);
       setLocationShared(true);
     } catch {
-      // Background enrichment — a failed share here is not something to
-      // alarm an elderly user about. It will simply try again next visit.
+      // Ignored non-blocking
     }
   }
 
@@ -145,20 +123,6 @@ export function ElderlyHomeScreen({ navigation }) {
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Continuous background tracking — separate from the one-shot sharing
-  // above (Phase 3 step 2). Re-checked whenever this screen regains focus,
-  // not just on mount: covers coming back from the system Settings screen
-  // after granting "Allow all the time" on Android 11+, where the in-app
-  // prompt can't grant it directly (see backgroundTracking.js) — if the
-  // permission is now granted, this retries starting the task automatically
-  // rather than making the person hunt for the button again.
-  // ---------------------------------------------------------------------
-  // A ref, not a dependency: useCallback below is memoized once so
-  // useFocusEffect only fires on an actual focus transition, not on every
-  // trackingPhase change — the effect still needs the *current* phase when
-  // it runs, so it reads it from a ref kept in sync, same pattern as
-  // sosLocationRef above.
   const trackingPhaseRef = useRef(trackingPhase);
   useEffect(() => {
     trackingPhaseRef.current = trackingPhase;
@@ -180,9 +144,6 @@ export function ElderlyHomeScreen({ navigation }) {
         if (cancelled) return;
         setTrackingPhase((prev) => {
           if (active) return 'on';
-          // A denied-permission explanation should stay on screen until the
-          // user actually acts on it, not reset to a bare "off" on every
-          // refocus.
           return prev === 'foreground_denied' || prev === 'background_denied' ? prev : 'off';
         });
       })();
@@ -204,17 +165,10 @@ export function ElderlyHomeScreen({ navigation }) {
     setTrackingPhase('off');
   }
 
-  // ---------------------------------------------------------------------
-  // Pressing SOS
-  // ---------------------------------------------------------------------
-
   function startCountdown() {
     setCountdown(COUNTDOWN_SECONDS);
     setPhase('confirming');
 
-    // Started now, not awaited until fireSos — see SOS_LOCATION_TIMEOUT_MS.
-    // If permission isn't granted this resolves to null immediately, which
-    // is exactly the "fire without a location" path.
     sosLocationRef.current = captureCurrentLocation({ timeoutMs: SOS_LOCATION_TIMEOUT_MS });
 
     countdownTimer.current = setInterval(() => {
@@ -236,8 +190,6 @@ export function ElderlyHomeScreen({ navigation }) {
 
   async function fireSos() {
     setPhase('sending');
-    // Already settled by now — SOS_LOCATION_TIMEOUT_MS is shorter than the
-    // countdown that just finished — so this await does not delay sending.
     const location = await (sosLocationRef.current ?? Promise.resolve(null));
     try {
       const { alert: created } = await createSosAlert(location);
@@ -245,17 +197,12 @@ export function ElderlyHomeScreen({ navigation }) {
       setPhase('active');
     } catch (err) {
       if (err instanceof ApiError && err.code === 'sos_already_active') {
-        // Not a failure — someone already pressed it (perhaps this same
-        // person, moments ago on another screen). Reassurance, not an error.
         setBanner('Help is already on the way.');
         await checkActive();
         setPhase('active');
         return;
       }
 
-      // A genuine network problem while trying to send an SOS is the one
-      // moment this screen must not go quiet. Offer to try again immediately
-      // rather than showing a generic error and leaving someone stranded.
       setBanner(
         err instanceof NetworkError
           ? 'Could not reach the server. Tap SOS to try again.'
@@ -264,11 +211,6 @@ export function ElderlyHomeScreen({ navigation }) {
       setPhase('idle');
     }
   }
-
-  // ---------------------------------------------------------------------
-  // Cancelling an active alert — behind one confirmation, since dismissing a
-  // real emergency should not be as easy as raising one.
-  // ---------------------------------------------------------------------
 
   async function confirmCancelAlert() {
     if (!alert) return;
@@ -279,8 +221,6 @@ export function ElderlyHomeScreen({ navigation }) {
       setBanner(null);
       setPhase('idle');
     } catch (err) {
-      // The alert may have just been resolved by a family member — either
-      // way, find out what is actually true rather than guessing.
       await checkActive();
       if (err instanceof NetworkError) {
         setBanner('Could not reach the server. Your alert may still be active.');
@@ -288,95 +228,172 @@ export function ElderlyHomeScreen({ navigation }) {
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------
+  const firstName = user?.fullName?.trim() ? user.fullName.trim().split(' ')[0] : 'there';
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <View style={styles.content}>
-        <Text style={styles.greeting}>Hello, {user?.fullName?.split(' ')[0] ?? 'there'}</Text>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.greetingTitle}>Hello, {firstName}</Text>
+          <Text style={styles.greetingSubtitle}>How can we help you today?</Text>
+        </View>
 
-        {banner && (
-          <Pressable onPress={() => setBanner(null)} style={styles.banner}>
+        {/* Transient Notice Banner */}
+        {banner ? (
+          <Pressable onPress={() => setBanner(null)} style={styles.banner} accessibilityRole="button">
             <Text style={styles.bannerText}>{banner}</Text>
           </Pressable>
-        )}
+        ) : null}
 
-        <View style={styles.center}>
-          {phase === 'checking' && <ActivityIndicator size="large" color={colors.primary} />}
+        {/* SOS & Main Actions */}
+        <View style={styles.mainContainer}>
+          {phase === 'checking' && (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={colors.primary} />
+              <Text style={styles.loadingText}>Checking emergency status...</Text>
+            </View>
+          )}
 
           {(phase === 'idle' || phase === 'sending') && (
             <>
-              <Pressable
-                onPress={startCountdown}
-                disabled={phase === 'sending'}
-                accessibilityRole="button"
-                accessibilityLabel="Press for help. Sends an emergency alert after a 5 second countdown you can cancel."
-                style={({ pressed }) => [styles.sosButton, pressed && styles.sosButtonPressed]}
-              >
-                {phase === 'sending' ? (
-                  <ActivityIndicator size="large" color={colors.surface} />
-                ) : (
-                  <Text style={styles.sosButtonText}>SOS</Text>
-                )}
-              </Pressable>
-              <Text style={styles.helpText}>Press for help</Text>
-              <Text style={styles.subText}>You'll have 5 seconds to cancel before it sends.</Text>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.ambulanceCardButton,
-                  pressed && styles.ambulanceCardButtonPressed,
-                ]}
-                onPress={() => navigation.navigate('AmbulanceBooking')}
-                accessibilityRole="button"
-                accessibilityLabel="Request emergency ambulance"
-              >
-                <Text style={styles.ambulanceCardText}>🚑 Request Emergency Ambulance</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.disasterCardButton,
-                  pressed && styles.disasterCardButtonPressed,
-                ]}
-                onPress={() => navigation.navigate('DisasterAlerts')}
-                accessibilityRole="button"
-                accessibilityLabel="View disaster alerts and weather warnings"
-              >
-                <Text style={styles.disasterCardText}>📢 Disaster & Weather Alerts</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.responseCenterCardButton,
-                  pressed && styles.responseCenterCardButtonPressed,
-                ]}
-                onPress={() => navigation.navigate('ResponseCenter')}
-                accessibilityRole="button"
-                accessibilityLabel="24 7 emergency response center"
-              >
-                <Text style={styles.responseCenterCardText}>📞 24/7 Emergency Response Center</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.fallCardButton,
-                  pressed && styles.fallCardButtonPressed,
-                ]}
-                onPress={() => navigation.navigate('FallDetection')}
-                accessibilityRole="button"
-                accessibilityLabel="Hybrid fall detection automatic motion monitor and manual trigger"
-              >
-                <Text style={styles.fallCardText}>🍂 Hybrid Fall Detection ("I Fell")</Text>
-              </Pressable>
-              <LocationSharingCard
-                permission={locationPermission}
-                shared={locationShared}
-                onEnable={handleEnableLocationSharing}
-              />
-              <BackgroundTrackingCard
-                phase={trackingPhase}
-                onEnable={handleEnableTracking}
-                onDisable={handleDisableTracking}
-              />
+              {/* SOS Circle & Instructions */}
+              <View style={styles.sosSection}>
+                <Pressable
+                  onPress={startCountdown}
+                  disabled={phase === 'sending'}
+                  accessibilityRole="button"
+                  accessibilityLabel="Emergency SOS button. Tap for immediate help. Starts a 5 second cancellable countdown."
+                  style={({ pressed }) => [
+                    styles.sosButton,
+                    pressed && styles.sosButtonPressed,
+                    phase === 'sending' && styles.sosButtonDisabled,
+                  ]}
+                >
+                  {phase === 'sending' ? (
+                    <ActivityIndicator size="large" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.sosButtonText}>SOS</Text>
+                  )}
+                </Pressable>
+
+                <Text style={styles.sosHeadline}>Press for help</Text>
+                <Text style={styles.sosSubtext}>
+                  You have 5 seconds to cancel before the emergency alert is sent.
+                </Text>
+              </View>
+
+              {/* Action Cards Section */}
+              <View style={styles.actionCardsSection}>
+                <Text style={styles.sectionHeading}>Emergency Services</Text>
+
+                {/* 1. Request Emergency Ambulance */}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.ambulanceCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('AmbulanceBooking')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Request Emergency Ambulance"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#FEE2E2' }]}>
+                    <Text style={styles.cardIconText}>🚑</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: colors.danger }]}>
+                      Request Emergency Ambulance
+                    </Text>
+                    <Text style={styles.cardSubtitle}>Immediate medical transport & hospital choice</Text>
+                  </View>
+                </Pressable>
+
+                {/* 2. Hybrid Fall Detection */}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.fallCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('FallDetection')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Hybrid Fall Detection"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#FEF3C7' }]}>
+                    <Text style={styles.cardIconText}>🍂</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#D97706' }]}>
+                      Hybrid Fall Detection
+                    </Text>
+                    <Text style={styles.cardSubtitle}>Automatic motion monitor & manual trigger</Text>
+                  </View>
+                </Pressable>
+
+                {/* 3. 24/7 Emergency Response Center */}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.responseCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('ResponseCenter')}
+                  accessibilityRole="button"
+                  accessibilityLabel="24 7 Emergency Response Center"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#DCFCE7' }]}>
+                    <Text style={styles.cardIconText}>📞</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: colors.success }]}>
+                      24/7 Emergency Response Center
+                    </Text>
+                    <Text style={styles.cardSubtitle}>Call helpline desk anytime for crisis support</Text>
+                  </View>
+                </Pressable>
+
+                {/* 4. Disaster & Weather Alerts */}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.disasterCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('DisasterAlerts')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Disaster and Weather Alerts"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#DBEAFE' }]}>
+                    <Text style={styles.cardIconText}>📢</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: colors.primary }]}>
+                      Disaster & Weather Alerts
+                    </Text>
+                    <Text style={styles.cardSubtitle}>Area warnings & safety advice</Text>
+                  </View>
+                </Pressable>
+              </View>
+
+              {/* Location & Tracking Controls */}
+              <View style={styles.locationSection}>
+                <Text style={styles.sectionHeading}>Location & Safety Sharing</Text>
+                <LocationSharingCard
+                  permission={locationPermission}
+                  shared={locationShared}
+                  onEnable={handleEnableLocationSharing}
+                />
+                <BackgroundTrackingCard
+                  phase={trackingPhase}
+                  onEnable={handleEnableTracking}
+                  onDisable={handleDisableTracking}
+                />
+              </View>
             </>
           )}
 
@@ -391,11 +408,20 @@ export function ElderlyHomeScreen({ navigation }) {
           )}
         </View>
 
-        <Pressable style={styles.signOutButton} onPress={signOut} accessibilityRole="button">
-          <Text style={styles.signOutText}>Sign out</Text>
-        </Pressable>
-      </View>
+        {/* Footer Sign Out Button */}
+        <View style={styles.footer}>
+          <Pressable
+            style={({ pressed }) => [styles.signOutButton, pressed && styles.signOutButtonPressed]}
+            onPress={signOut}
+            accessibilityRole="button"
+            accessibilityLabel="Sign out of account"
+          >
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
 
+      {/* Countdown Modal */}
       <Modal
         visible={phase === 'confirming'}
         transparent
@@ -404,15 +430,19 @@ export function ElderlyHomeScreen({ navigation }) {
       >
         <View style={styles.overlay}>
           <View style={styles.overlayCard}>
-            <Text style={styles.overlayTitle}>Sending SOS in</Text>
-            <Text style={styles.countdownNumber}>{countdown}</Text>
+            <Text style={styles.overlayWarnIcon}>⚠️</Text>
+            <Text style={styles.overlayTitle}>Sending Emergency SOS</Text>
+            <Text style={styles.overlaySubtitle}>Alerting family & emergency contacts in:</Text>
+            <View style={styles.modalCountdownCircle}>
+              <Text style={styles.countdownNumber}>{countdown}</Text>
+            </View>
             <Pressable
               onPress={cancelCountdown}
               accessibilityRole="button"
-              accessibilityLabel="Cancel. Do not send an alert."
-              style={styles.bigCancelButton}
+              accessibilityLabel="Cancel emergency alert"
+              style={({ pressed }) => [styles.bigCancelButton, pressed && styles.bigCancelButtonPressed]}
             >
-              <Text style={styles.bigCancelButtonText}>Cancel</Text>
+              <Text style={styles.bigCancelButtonText}>Cancel Alert</Text>
             </Pressable>
           </View>
         </View>
@@ -426,56 +456,68 @@ function ActiveAlert({ alert, phase, onRequestCancel, onBackOut, onConfirmCancel
 
   return (
     <View style={styles.activeCard}>
-      <Text style={styles.activeTitle}>SOS Active</Text>
+      <Text style={styles.activeIcon}>🚨</Text>
+      <Text style={styles.activeTitle}>Emergency SOS Active</Text>
       <Text style={styles.activeSubtitle}>
         {minutesAgo === 0 ? 'Triggered just now' : `Triggered ${minutesAgo} minute${minutesAgo === 1 ? '' : 's'} ago`}
       </Text>
+      <Text style={styles.activeDesc}>Help is on the way. Your emergency contacts have been notified.</Text>
 
       {phase === 'active' && (
         <Pressable
           onPress={onRequestCancel}
           accessibilityRole="button"
-          style={styles.safeButton}
+          style={({ pressed }) => [styles.safeButton, pressed && styles.safeButtonPressed]}
         >
-          <Text style={styles.safeButtonText}>I'm safe — cancel alert</Text>
+          <Text style={styles.safeButtonText}>I'm safe — Cancel Alert</Text>
         </Pressable>
       )}
 
       {phase === 'confirmingCancel' && (
         <View style={styles.confirmRow}>
-          <Text style={styles.confirmText}>Are you sure you're safe now?</Text>
+          <Text style={styles.confirmText}>Are you sure you want to cancel?</Text>
           <View style={styles.confirmButtons}>
-            <Pressable onPress={onBackOut} accessibilityRole="button" style={styles.confirmNoButton}>
-              <Text style={styles.confirmNoButtonText}>No, keep it active</Text>
+            <Pressable
+              onPress={onBackOut}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.confirmNoButton, pressed && styles.confirmNoButtonPressed]}
+            >
+              <Text style={styles.confirmNoButtonText}>Keep Alert Active</Text>
             </Pressable>
-            <Pressable onPress={onConfirmCancel} accessibilityRole="button" style={styles.confirmYesButton}>
-              <Text style={styles.confirmYesButtonText}>Yes, I'm safe</Text>
+            <Pressable
+              onPress={onConfirmCancel}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.confirmYesButton, pressed && styles.confirmYesButtonPressed]}
+            >
+              <Text style={styles.confirmYesButtonText}>Yes, I'm Safe</Text>
             </Pressable>
           </View>
         </View>
       )}
 
-      {phase === 'cancelling' && <ActivityIndicator size="large" color={colors.text} />}
+      {phase === 'cancelling' && <ActivityIndicator size="large" color={colors.danger} />}
     </View>
   );
 }
 
-/**
- * The plain-language explanation the OS permission prompt itself doesn't
- * give — shown before asking, per Phase 1 step 2's requirement. Never blocks
- * the SOS button in any state; this is a small card underneath it, not a gate
- * in front of it.
- */
 function LocationSharingCard({ permission, shared, onEnable }) {
   if (permission === 'checking') return null;
 
   if (permission === 'granted') {
     return (
       <View style={styles.locationCard}>
+        <View style={styles.locationHeaderRow}>
+          <Text style={styles.locationCardTitle}>Emergency Location Sharing</Text>
+          <View style={[styles.statusPill, { backgroundColor: shared ? '#DCFCE7' : '#FEF3C7' }]}>
+            <Text style={[styles.statusPillText, { color: shared ? '#065F46' : '#92400E' }]}>
+              {shared ? '● ON' : '○ Pending'}
+            </Text>
+          </View>
+        </View>
         <Text style={styles.locationText}>
           {shared
-            ? 'Location sharing is on — your family can see where you are if you press SOS.'
-            : 'Location sharing is on. Could not get a fix just now — will try again next time you open the app.'}
+            ? 'Location sharing is active. Your coordinates will be attached automatically if you press SOS.'
+            : 'Current location is temporarily unavailable. ElderCare will try again automatically on next fix.'}
         </Text>
       </View>
     );
@@ -484,39 +526,35 @@ function LocationSharingCard({ permission, shared, onEnable }) {
   if (permission === 'denied') {
     return (
       <View style={styles.locationCard}>
+        <View style={styles.locationHeaderRow}>
+          <Text style={styles.locationCardTitle}>Emergency Location Sharing</Text>
+          <View style={[styles.statusPill, { backgroundColor: '#FEE2E2' }]}>
+            <Text style={[styles.statusPillText, { color: colors.danger }]}>○ OFF</Text>
+          </View>
+        </View>
         <Text style={styles.locationText}>
-          Location sharing is off. SOS still works — your family just won't see where you are.
+          Location permission is turned off. SOS button will still work, but location won't be attached.
         </Text>
         <Pressable onPress={() => Linking.openSettings()} accessibilityRole="button">
-          <Text style={styles.locationLink}>Open settings to turn it on</Text>
+          <Text style={styles.locationLink}>Open Settings to enable location</Text>
         </Pressable>
       </View>
     );
   }
 
-  // 'undetermined'
   return (
     <View style={styles.locationCard}>
+      <Text style={styles.locationCardTitle}>Emergency Location Sharing</Text>
       <Text style={styles.locationText}>
-        ElderCare can share your location so your family can see where you are if you press SOS.
-        This only happens on this device.
+        Allow ElderCare to attach your GPS coordinates when you send an emergency SOS.
       </Text>
       <Pressable onPress={onEnable} accessibilityRole="button">
-        <Text style={styles.locationLink}>Enable location sharing</Text>
+        <Text style={styles.locationLink}>Enable Location Sharing</Text>
       </Pressable>
     </View>
   );
 }
 
-/**
- * Continuous background tracking — deliberately a separate card from
- * LocationSharingCard above, not folded into it. That one is a single
- * foreground capture tied to this session; this is an ongoing background
- * service with its own permission step (foreground, then background) and
- * its own on/off state the elderly user controls. Conflating the copy for
- * both risks the elderly user not understanding what either one actually
- * does. See BUILD_LOG.md, Phase 3 step 2.
- */
 function BackgroundTrackingCard({ phase, onEnable, onDisable }) {
   if (phase === 'checking') return null;
 
@@ -531,229 +569,427 @@ function BackgroundTrackingCard({ phase, onEnable, onDisable }) {
   if (phase === 'on') {
     return (
       <View style={styles.locationCard}>
+        <View style={styles.locationHeaderRow}>
+          <Text style={styles.locationCardTitle}>Continuous Location Tracking</Text>
+          <View style={[styles.statusPill, { backgroundColor: '#DCFCE7' }]}>
+            <Text style={[styles.statusPillText, { color: '#065F46' }]}>● ACTIVE</Text>
+          </View>
+        </View>
         <Text style={styles.locationText}>
-          Continuous location tracking is on. Your family can see where you are, even when
-          ElderCare isn't open. A notification stays on screen the whole time this is on.
+          Allows your family to view your location even when ElderCare is closed. A persistent status notification stays on your phone.
         </Text>
         <Pressable onPress={onDisable} accessibilityRole="button">
-          <Text style={styles.locationLink}>Turn off</Text>
+          <Text style={[styles.locationLink, { color: colors.danger }]}>Turn Off Continuous Tracking</Text>
         </Pressable>
       </View>
     );
   }
 
-  if (phase === 'background_denied') {
+  if (phase === 'background_denied' || phase === 'foreground_denied') {
     return (
       <View style={styles.locationCard}>
+        <View style={styles.locationHeaderRow}>
+          <Text style={styles.locationCardTitle}>Continuous Location Tracking</Text>
+          <View style={[styles.statusPill, { backgroundColor: '#FEE2E2' }]}>
+            <Text style={[styles.statusPillText, { color: colors.danger }]}>○ OFF</Text>
+          </View>
+        </View>
         <Text style={styles.locationText}>
-          Continuous tracking needs "Allow all the time" turned on in your phone's Settings — it
-          can't be turned on from inside the app on this version of Android.
+          Continuous tracking requires location permission set to "Allow all the time" in your device system Settings.
         </Text>
         <Pressable onPress={() => Linking.openSettings()} accessibilityRole="button">
-          <Text style={styles.locationLink}>Open settings</Text>
+          <Text style={styles.locationLink}>Open Settings to enable</Text>
         </Pressable>
       </View>
     );
   }
 
-  if (phase === 'foreground_denied') {
-    return (
-      <View style={styles.locationCard}>
-        <Text style={styles.locationText}>Continuous tracking needs location permission, which is currently off.</Text>
-        <Pressable onPress={() => Linking.openSettings()} accessibilityRole="button">
-          <Text style={styles.locationLink}>Open settings</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  // 'off' (also covers 'unsupported_platform' — nothing more to offer there)
   return (
     <View style={styles.locationCard}>
+      <View style={styles.locationHeaderRow}>
+        <Text style={styles.locationCardTitle}>Continuous Location Tracking</Text>
+        <View style={[styles.statusPill, { backgroundColor: '#F3F4F6' }]}>
+          <Text style={[styles.statusPillText, { color: colors.textMuted }]}>○ OFF</Text>
+        </View>
+      </View>
       <Text style={styles.locationText}>
-        Turn on continuous tracking so your family can see where you are even when ElderCare
-        isn't open. SOS works the same either way.
+        Allows family members to view your location in real-time even when ElderCare is not open.
       </Text>
       <Pressable onPress={onEnable} accessibilityRole="button">
-        <Text style={styles.locationLink}>Turn on continuous tracking</Text>
+        <Text style={styles.locationLink}>Turn On Continuous Tracking</Text>
       </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  content: { flex: 1, padding: spacing.lg, gap: spacing.md },
-  greeting: { fontSize: type.heading, fontWeight: '600', color: colors.text },
+  safe: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  scrollContent: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl * 2,
+    gap: spacing.lg,
+  },
+  header: {
+    gap: 4,
+  },
+  greetingTitle: {
+    fontSize: type.heading + 4,
+    fontWeight: '900',
+    color: colors.text,
+    letterSpacing: -0.5,
+  },
+  greetingSubtitle: {
+    fontSize: type.body,
+    color: colors.textMuted,
+    fontWeight: '500',
+  },
   banner: {
     backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
     borderRadius: 12,
     padding: spacing.md,
   },
-  bannerText: { fontSize: type.body, color: colors.text, fontWeight: '600' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md },
-
+  bannerText: {
+    fontSize: type.body - 1,
+    color: '#92400E',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  mainContainer: {
+    gap: spacing.xl,
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    paddingVertical: spacing.xl,
+    gap: spacing.md,
+  },
+  loadingText: {
+    fontSize: type.body,
+    color: colors.textMuted,
+  },
+  sosSection: {
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
   sosButton: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
     backgroundColor: colors.danger,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
+    shadowColor: colors.danger,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
+    marginVertical: 4,
   },
-  sosButtonPressed: { backgroundColor: '#961515' },
-  sosButtonText: { fontSize: 56, fontWeight: '800', color: colors.surface, letterSpacing: 2 },
-  helpText: { fontSize: type.heading, fontWeight: '700', color: colors.text },
-  subText: { fontSize: type.body, color: colors.textMuted, textAlign: 'center', maxWidth: 280 },
-  ambulanceCardButton: {
-    backgroundColor: '#FEE2E2',
+  sosButtonPressed: {
+    backgroundColor: '#991B1B',
+    transform: [{ scale: 0.96 }],
+  },
+  sosButtonDisabled: {
+    opacity: 0.8,
+  },
+  sosButtonText: {
+    fontSize: 52,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 2,
+  },
+  sosHeadline: {
+    fontSize: type.heading,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  sosSubtext: {
+    fontSize: type.body - 1,
+    color: colors.textMuted,
+    textAlign: 'center',
+    maxWidth: 290,
+    lineHeight: 21,
+  },
+  actionCardsSection: {
+    gap: spacing.md,
+  },
+  sectionHeading: {
+    fontSize: type.heading - 2,
+    fontWeight: '800',
+    color: colors.text,
+    marginBottom: 2,
+  },
+  actionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 16,
     borderWidth: 1.5,
+    padding: spacing.md,
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+  },
+  actionCardPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.9,
+  },
+  ambulanceCard: {
+    backgroundColor: '#FEF2F2',
     borderColor: colors.danger,
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: spacing.lg,
-    width: '100%',
-    maxWidth: 320,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  ambulanceCardButtonPressed: {
-    backgroundColor: '#FECACA',
-  },
-  ambulanceCardText: {
-    color: colors.danger,
-    fontSize: type.body,
-    fontWeight: '800',
-  },
-  disasterCardButton: {
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1.5,
-    borderColor: colors.primary,
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: spacing.lg,
-    width: '100%',
-    maxWidth: 320,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  disasterCardButtonPressed: {
-    backgroundColor: '#DBEAFE',
-  },
-  disasterCardText: {
-    color: colors.primary,
-    fontSize: type.body,
-    fontWeight: '800',
-  },
-  responseCenterCardButton: {
-    backgroundColor: '#F0FDF4',
-    borderWidth: 1.5,
-    borderColor: colors.success,
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: spacing.lg,
-    width: '100%',
-    maxWidth: 320,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  responseCenterCardButtonPressed: {
-    backgroundColor: '#DCFCE7',
-  },
-  responseCenterCardText: {
-    color: colors.success,
-    fontSize: type.body,
-    fontWeight: '800',
-  },
-  fallCardButton: {
+  fallCard: {
     backgroundColor: '#FFFBEB',
-    borderWidth: 1.5,
     borderColor: '#D97706',
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: spacing.lg,
-    width: '100%',
-    maxWidth: 320,
+  },
+  responseCard: {
+    backgroundColor: '#F0FDF4',
+    borderColor: colors.success,
+  },
+  disasterCard: {
+    backgroundColor: '#EFF6FF',
+    borderColor: colors.primary,
+  },
+  cardIconBadge: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fallCardButtonPressed: {
-    backgroundColor: '#FEF3C7',
+  cardIconText: {
+    fontSize: 22,
   },
-  fallCardText: {
-    color: '#D97706',
+  cardTextContainer: {
+    flex: 1,
+    gap: 2,
+  },
+  cardTitle: {
     fontSize: type.body,
     fontWeight: '800',
   },
-
+  cardSubtitle: {
+    fontSize: type.small,
+    color: colors.textMuted,
+  },
+  locationSection: {
+    gap: spacing.md,
+  },
   locationCard: {
     backgroundColor: colors.surface,
-    borderRadius: 12,
-    borderWidth: 1,
+    borderRadius: 16,
+    borderWidth: 1.5,
     borderColor: colors.border,
     padding: spacing.md,
-    gap: spacing.sm,
-    maxWidth: 320,
+    gap: spacing.xs,
   },
-  locationText: { fontSize: type.small, color: colors.textMuted, textAlign: 'center' },
-  locationLink: { fontSize: type.small, color: colors.primary, fontWeight: '700', textAlign: 'center' },
-
-  overlay: { flex: 1, backgroundColor: 'rgba(17,24,39,0.85)', alignItems: 'center', justifyContent: 'center' },
-  overlayCard: { alignItems: 'center', gap: spacing.lg, padding: spacing.xl },
-  overlayTitle: { fontSize: type.heading, color: colors.surface, fontWeight: '600' },
-  countdownNumber: { fontSize: 96, fontWeight: '800', color: colors.surface },
-  bigCancelButton: {
-    backgroundColor: colors.surface,
-    paddingVertical: spacing.md,
+  locationHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  locationCardTitle: {
+    fontSize: type.body - 1,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  statusPill: {
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  statusPillText: {
+    fontSize: type.small - 1,
+    fontWeight: '800',
+  },
+  locationText: {
+    fontSize: type.small + 1,
+    color: colors.textMuted,
+    lineHeight: 20,
+  },
+  locationLink: {
+    fontSize: type.body - 1,
+    color: colors.primary,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  footer: {
+    alignItems: 'center',
+    marginTop: spacing.md,
+  },
+  signOutButton: {
+    paddingVertical: 12,
     paddingHorizontal: spacing.xl,
-    borderRadius: 16,
-    minWidth: 220,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+  },
+  signOutButtonPressed: {
+    backgroundColor: colors.background,
+  },
+  signOutText: {
+    fontSize: type.body - 1,
+    color: colors.danger,
+    fontWeight: '700',
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(17,24,39,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  overlayCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 24,
+    padding: spacing.xl,
+    alignItems: 'center',
+    gap: spacing.sm,
+    width: '100%',
+    maxWidth: 340,
+  },
+  overlayWarnIcon: {
+    fontSize: 48,
+  },
+  overlayTitle: {
+    fontSize: type.heading + 2,
+    fontWeight: '900',
+    color: colors.danger,
+    textAlign: 'center',
+  },
+  overlaySubtitle: {
+    fontSize: type.body - 1,
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
+  modalCountdownCircle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 3,
+    borderColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: spacing.md,
+  },
+  countdownNumber: {
+    fontSize: 54,
+    fontWeight: '900',
+    color: colors.danger,
+  },
+  bigCancelButton: {
+    backgroundColor: colors.border,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.xl,
+    borderRadius: 14,
+    width: '100%',
     alignItems: 'center',
   },
-  bigCancelButtonText: { fontSize: type.heading, fontWeight: '700', color: colors.text },
-
+  bigCancelButtonPressed: {
+    backgroundColor: '#D1D5DB',
+  },
+  bigCancelButtonText: {
+    fontSize: type.body + 1,
+    fontWeight: '800',
+    color: colors.text,
+  },
   activeCard: {
-    backgroundColor: '#FEE2E2',
-    borderRadius: 16,
-    padding: spacing.lg,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 2,
+    borderColor: colors.danger,
+    borderRadius: 20,
+    padding: spacing.xl,
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  activeIcon: {
+    fontSize: 48,
+  },
+  activeTitle: {
+    fontSize: type.heading + 2,
+    fontWeight: '900',
+    color: colors.danger,
+    textAlign: 'center',
+  },
+  activeSubtitle: {
+    fontSize: type.body,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  activeDesc: {
+    fontSize: type.body - 1,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
+  safeButton: {
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.xl,
+    width: '100%',
+    alignItems: 'center',
+  },
+  safeButtonPressed: {
+    backgroundColor: colors.background,
+  },
+  safeButtonText: {
+    fontSize: type.body,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  confirmRow: {
     alignItems: 'center',
     gap: spacing.md,
     width: '100%',
   },
-  activeTitle: { fontSize: 32, fontWeight: '800', color: colors.danger },
-  activeSubtitle: { fontSize: type.body, color: colors.text },
-  safeButton: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    minWidth: 240,
-    alignItems: 'center',
+  confirmText: {
+    fontSize: type.body,
+    fontWeight: '700',
+    color: colors.text,
+    textAlign: 'center',
   },
-  safeButtonText: { fontSize: type.body, fontWeight: '700', color: colors.text },
-  confirmRow: { alignItems: 'center', gap: spacing.md, width: '100%' },
-  confirmText: { fontSize: type.body, fontWeight: '600', color: colors.text },
-  confirmButtons: { gap: spacing.sm, width: '100%' },
+  confirmButtons: {
+    gap: spacing.sm,
+    width: '100%',
+  },
   confirmNoButton: {
     backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
     borderRadius: 12,
-    paddingVertical: spacing.md,
+    paddingVertical: 14,
     alignItems: 'center',
   },
-  confirmNoButtonText: { fontSize: type.body, fontWeight: '600', color: colors.text },
+  confirmNoButtonPressed: {
+    backgroundColor: colors.background,
+  },
+  confirmNoButtonText: {
+    fontSize: type.body - 1,
+    fontWeight: '700',
+    color: colors.text,
+  },
   confirmYesButton: {
-    backgroundColor: colors.success,
+    backgroundColor: colors.danger,
     borderRadius: 12,
-    paddingVertical: spacing.md,
+    paddingVertical: 14,
     alignItems: 'center',
   },
-  confirmYesButtonText: { fontSize: type.body, fontWeight: '700', color: colors.surface },
-
-  signOutButton: { alignItems: 'center', paddingVertical: spacing.sm },
-  signOutText: { fontSize: type.small, color: colors.textMuted },
+  confirmYesButtonPressed: {
+    backgroundColor: '#991B1B',
+  },
+  confirmYesButtonText: {
+    fontSize: type.body - 1,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
 });
