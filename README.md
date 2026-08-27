@@ -101,13 +101,16 @@ elder-care/
 - **Emergency Advice**: Clear, calm bullet-point instructions for crisis situations.
 - **Emergency Shortcuts**: Quick navigation links to Ambulance Booking, Disaster Alerts, and Emergency SOS.
 
-#### 4. Manual Fall Detection ("I FELL" Trigger)
-- **Manual "I FELL" Action**: High-visibility manual trigger button (diameter 220px).
-- **Confirmation Modal**: "Send Emergency Fall Alert?" review step to avoid accidental taps.
-- **Location Association**: Asynchronous best-effort GPS capture attached to the alert record; location failure does not block alert creation.
+#### 4. Hybrid Fall Detection (Automatic Motion + Manual "I FELL")
+- **Hybrid System Overview**: Combines phone motion sensor monitoring (`expo-sensors`) with a manual "I FELL" emergency override button.
+- **Multi-Stage Motion Heuristic**: Uses accelerometer & gyroscope data to evaluate impact acceleration spike, angular rotation, and post-impact rest phase before starting countdown, preventing false triggers from simple phone drops.
+- **10-Second Confirmation Countdown Overlay**: Shows a visible `10..9..8..7..6..5..4..3..2..1` timer modal (`⚠️ POSSIBLE FALL DETECTED`):
+  - **`I'M OK`**: Cancels alert, stops countdown, clears state, enters 10s cooldown.
+  - **`SEND HELP NOW`**: Immediately sends emergency fall alert.
+  - **Timeout (0s)**: Automatically creates fall alert and notifies contacts if user does not respond within 10 seconds.
+- **Manual Override**: The large "I FELL" button remains available for immediate manual emergency requests.
+- **Sensor Availability & Permissions**: Gracefully detects when motion sensors are unavailable (e.g. web or emulators without motion hardware) and falls back to Manual Fall Mode with clear UI messaging without crashing.
 - **Emergency Contact Fanout**: Integrates with the backend alert pipeline (`advanceFanout`), notifying emergency contacts by priority (SMS, push, email).
-- **Reassurance & False Alarm Cancellation**: Shows active alert status card (*"Assistance is on the way"*) with an option to cancel false alarms.
-- *Explicit Note: No automatic sensor-based or camera fall detection is used; this is strictly a manual trigger.*
 
 ---
 

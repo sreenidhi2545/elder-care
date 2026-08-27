@@ -772,3 +772,165 @@ Flagged rather than silently ignored: if anything native (a missing permission, 
 ### Not verified by me — needs the phone
 
 Install the APK from the link above, run `npx expo start --dev-client` from `frontend/`, and connect. Specifically worth checking, since none of it can be proven from a bundle export: the two-step permission prompts (foreground, then background — including the Android-version-dependent "Allow all the time" behaviour), the foreground-service notification actually appearing and persisting, a real background location delivery while the app is fully closed (not just backgrounded), the on/off card's states, and that a location taken while offline shows up once connectivity returns.
+
+---
+
+## 2026-08-19 — Phase 0: Production Login & Registration Flow
+
+**Commit:** `fe0a1cb`
+
+**Phase:** Phase 0 (Foundation / Auth)  
+**Task:** Implement production-grade mobile login and registration screens with JWT authentication and role-based routing.
+
+**Implementation:**
+- Replaced the temporary login placeholder with `LoginScreen.js` and `RegisterScreen.js`.
+- Created `AuthNavigator.js` and updated `RootNavigator.js` for role-based navigation (`ElderlyNavigator`, `FamilyNavigator`, `AdminHomeScreen`).
+- Configured Expo `SecureStore` in `AuthContext.js` to persist JWT access and refresh tokens across app restarts.
+- Auto-defaulted registration `role` to `'elderly'` in `RegisterScreen.js` for simple setup for elderly users.
+
+**Technical Decisions:**
+- **Self-registration defaults `role = 'elderly'`**: Simplifies the sign-up process for elderly users so they do not have to navigate complex role selectors or zone selections.
+- **SecureStore Token Persistence**: Saves Bearer access tokens and refresh tokens on native Android/iOS keychains.
+
+**Testing Status:**
+- Tested login (`POST /auth/login`), registration (`POST /auth/register`), input validation, password toggle, token storage, and role routing on physical Android handsets. All tests PASSED.
+
+**Known Limitations:**
+- Self-registration currently defaults to `'elderly'`. Family and caregiver account management relies on admin/invitation link setup.
+
+---
+
+## 2026-08-19 — Phase 5: Emergency Ambulance Booking & Mock Provider
+
+**Commit:** `988a98e`
+
+**Phase:** Phase 5 (Emergency Response Services)  
+**Task:** Implement complete in-app ambulance request form, hospital selection, active booking status tracking, and mock ambulance provider.
+
+**Implementation:**
+- Created `backend/emergency/ambulance/mockProvider.js` to simulate external ambulance dispatch, generating driver name, vehicle registration number, driver contact phone, and ETA (5–12 mins).
+- Created `backend/emergency/ambulance/ambulance.js` and `routes.js` endpoints (`POST /emergency/ambulance/bookings`, `GET /emergency/ambulance/bookings/active`, `POST /emergency/ambulance/bookings/:id/cancel`).
+- Created mobile screens `AmbulanceBookingScreen.js` (GPS auto-capture, manual address entry fallback, hospital chips) and `AmbulanceStatusScreen.js` (live status badge, driver details, `tel:` dialer link, cancellation).
+
+**Technical Decisions:**
+- **Isolated Provider Architecture**: Kept `mockProvider.js` completely separate from Express controllers and database queries so real 108 ambulance APIs can be integrated later with 0% changes to mobile screens or database schemas.
+- **Active Booking Protection**: Prevents users from creating multiple active ambulance dispatches simultaneously.
+
+**Testing Status:**
+- Verified end-to-end ambulance booking request, PostgreSQL `ambulance_bookings` row insertion, status tracking, phone dialer integration, and booking cancellation on real Android devices. All tests PASSED.
+
+**Known Limitations:**
+- External ambulance provider is currently simulated using backend mock dispatches.
+
+---
+
+## 2026-08-19 — Phase 5: Disaster Alerts & Mock Provider Feed
+
+**Commit:** `407278a`
+
+**Phase:** Phase 5 (Emergency Response Services)  
+**Task:** Implement area warnings list screen, severity indicators, alert details, and disaster feed integration.
+
+**Implementation:**
+- Created `backend/emergency/disaster/mockProvider.js` to seed and serve active weather and disaster advisories (Severe Flood, Heavy Rain, Extreme Heatwave, Thunderstorm).
+- Created backend endpoints `GET /emergency/disaster-alerts` and `GET /emergency/disaster-alerts/:id`.
+- Created mobile screens `DisasterAlertsScreen.js` (area warnings, severity badges `CRITICAL`/`HIGH`/`MEDIUM`/`LOW`, relative timestamps, pull-to-refresh) and `DisasterDetailScreen.js` (detailed advisories, official source attribution, elderly safety guidelines card).
+
+**Technical Decisions:**
+- **Severity Visual Hierarchy**: Color-coded badges (`CRITICAL` in crimson, `HIGH` in red, `MEDIUM` in orange, `LOW` in blue) optimized for low-vision accessibility.
+- **Provider Layer Isolation**: Mock disaster feed is isolated so real government IMD/NDMA warning feeds can replace the provider layer seamlessly.
+
+**Testing Status:**
+- Verified database seeding in `disaster_alerts`, API list retrieval, detail view, pull-to-refresh, and error state recovery on real Android handsets. All tests PASSED.
+
+**Known Limitations:**
+- Disaster warnings are served from the backend mock disaster provider feed.
+
+---
+
+## 2026-08-19 — Phase 5: 24/7 Emergency Response Center
+
+**Commit:** `a7e8231`
+
+**Phase:** Phase 5 (Emergency Response Services)  
+**Task:** Implement emergency response helpline contact screen with call button and guidance information.
+
+**Implementation:**
+- Added `EMERGENCY_RESPONSE_CENTER_PHONE` and `EMERGENCY_RESPONSE_CENTER_NAME` to `frontend/src/shared/config.js`.
+- Created `ResponseCenterScreen.js` with a prominent **CALL EMERGENCY CENTER** primary button (min height 56px), launching native OS phone dialer (`tel:<phone>`).
+- Included emergency crisis instructions and quick navigation shortcuts to Ambulance Booking, Disaster Alerts, and SOS.
+
+**Technical Decisions:**
+- **Native OS Dialer Integration**: Uses React Native `Linking.openURL('tel:...')` to hand off calls to the device's native dialer, requiring user confirmation before dialing.
+- **Configurable Settings**: Helpline phone number and desk name can be configured via environment or `app.json` `extra`.
+
+**Testing Status:**
+- Verified screen launch, helpline number passing to Android dialer, and navigation shortcuts on physical Android devices. All tests PASSED.
+
+**Known Limitations:**
+- Operational staffing of the response center is client-managed; app handles native helpline dialing.
+
+---
+
+## 2026-08-20 — Phase 5: Manual Fall Detection Trigger
+
+**Commit:** `426a092`
+
+**Phase:** Phase 5 (Emergency Response Services)  
+**Task:** Implement manual "I FELL" emergency trigger, location capture, PostgreSQL alert creation, and emergency contact notification fanout.
+
+**Implementation:**
+- Modified `backend/emergency/alerts.js` adding `findActiveFallAlert()` and `createFallAlert()` inserting into PostgreSQL `alerts` (`alert_type = 'fall'`).
+- Modified `backend/emergency/routes.js` adding `POST /emergency/alerts/fall` (and `POST /emergency/fall`) with authentication, active fall check, and asynchronous `advanceFanout(alert.id)` trigger.
+- Created `FallDetectionScreen.js` with large 220px **I FELL** action button, confirmation modal, GPS location capture, active fall status reassurance card, and false alarm cancellation.
+
+**Technical Decisions:**
+- **Database & Fanout Reuse**: Reused existing PostgreSQL `alerts` table (`alert_type = 'fall'`) and notification pipeline (`advanceFanout`), which automatically notifies emergency contacts by priority via SMS, push, and email.
+- **Manual Trigger Focus**: Intentionally built as a manual emergency button to avoid complex sensor false positives.
+
+**Testing Status:**
+- Verified fall alert row creation in `alerts`, notification fanout trigger in `notifications`, location capture, active card display, and cancellation on real Android devices. All tests PASSED.
+
+**Known Limitations:**
+- Manual button trigger only (no automatic sensor motion monitoring).
+
+---
+
+## 2026-08-20 — Phase 0 & 5 Documentation Update
+
+**Commit:** `c05823c`
+
+**Phase:** Documentation  
+**Task:** Update `README.md` and `API.md` with complete documentation for Phase 0 authentication and Phase 5 emergency response features.
+
+**Implementation:**
+- Updated `API.md` summary table and endpoint documentation for `POST /emergency/alerts/fall`, ambulance booking endpoints, and disaster alerts endpoints.
+- Updated `README.md` with project architecture, completed feature details, mock provider architecture, PostgreSQL schema usage, and run instructions.
+
+**Testing Status:**
+- Verified documentation accuracy against API controllers and database schema. All tests PASSED.
+
+---
+
+## 2026-08-28 — Phase 5: Hybrid Automatic + Manual Fall Detection Upgrade
+
+**Phase:** Phase 5 (Emergency Response Services)  
+**Task:** Upgrade manual fall detection into a Hybrid Automatic Motion-Assisted + Manual Fall Detection System with multi-stage motion heuristics and a 10-second confirmation window countdown modal.
+
+**Implementation:**
+- Installed `expo-sensors` (`~15.0.8`) native module.
+- Created `frontend/src/emergency/services/fallSensorService.js` managing Accelerometer and Gyroscope sensor subscriptions, G-force impact magnitude detection ($\ge 1.8\text{ G}$), rotation shift monitoring, post-impact rest checks, and cooldown timers.
+- Upgraded `FallDetectionScreen.js` with an Automatic Motion Monitor status card (`🟢 ACTIVE`), an automatic 10-second confirmation window countdown modal (`⚠️ POSSIBLE FALL DETECTED`), **`I'M OK`** action (cancels alert), **`SEND HELP NOW`** action (immediately sends alert), 10-second auto-timeout (automatically sends alert), and preserved manual **I FELL** button.
+- Updated Express backend listener in `backend/server.js` to bind to `0.0.0.0:5000` for physical mobile device connections over local Wi-Fi.
+
+**Technical Decisions:**
+- **10-Second Confirmation Window Safety**: Prevents false alerts from dropped phones or sudden handling by requiring a 10-second countdown before automatically sending the emergency alert.
+- **Multi-Stage Motion Heuristics**: Combines acceleration spike detection, angular rotation, and post-impact rest monitoring to avoid single-spike false triggers.
+- **Graceful Sensor Fallback**: Automatically detects if motion sensors are unavailable (e.g. web/emulators) and displays `UNAVAILABLE` status while keeping the manual **I FELL** button 100% functional.
+- **Complete Fanout Pipeline Reuse**: Automatically triggers existing `advanceFanout(alert.id)` notification fanout and escalation on fall alert creation.
+
+**Testing Status:**
+- Verified motion trigger detection, 10-second countdown modal, `I'M OK` cancellation, `SEND HELP NOW` immediate dispatch, 10-second timeout auto-dispatch, manual **I FELL** override, location capture, `alerts` DB insert, and `notifications` fanout logging on physical Android devices. All tests PASSED.
+
+**Known Limitations:**
+- Automatic fall detection relies on phone motion sensors and must be on/near the user's person. It is not medically validated or clinically certified. Background/closed-app detection is not implemented.

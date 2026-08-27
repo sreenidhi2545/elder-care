@@ -954,11 +954,11 @@ Returns detailed information for a specific disaster warning.
 
 ---
 
-## Manual Fall Alerts (Phase 5)
+## Hybrid Fall Alerts (Phase 5)
 
 ### `POST /emergency/alerts/fall`
 
-Triggers a manual fall alert (`alert_type: 'fall'`) for the authenticated user. Automatically invokes emergency contact notification fanout (`advanceFanout`).
+Triggers a fall alert (`alert_type: 'fall'`) for the authenticated user, supporting both manual "I FELL" button presses and automatic motion-sensor triggered detections (after the 10-second countdown window expires). Automatically invokes emergency contact notification fanout (`advanceFanout`).
 
 **Headers:** `Authorization: Bearer <accessToken>`
 
