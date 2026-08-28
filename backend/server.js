@@ -25,8 +25,8 @@ async function start() {
     process.exit(1);
   }
 
-  const listener = app.listen(config.port, () => {
-    console.log(`ElderCare backend listening on http://localhost:${config.port} [${config.nodeEnv}]`);
+  const listener = app.listen(config.port, '0.0.0.0', () => {
+    console.log(`ElderCare backend listening on http://0.0.0.0:${config.port} (localhost:${config.port}) [${config.nodeEnv}]`);
     console.log(`Health check: http://localhost:${config.port}/health`);
   });
 
