@@ -12,15 +12,14 @@ import express from 'express';
 import { checkConnection } from './shared/db/pool.js';
 import { ApiError } from './shared/http/errors.js';
 import { authRouter } from './shared/auth/routes.js';
+import { caregiverRouter } from './caregiver/routes/index.js';
 import { emergencyRouter } from './emergency/routes.js';
 import { familyRouter } from './family/routes.js';
-
 export const app = express();
 
 // Trust the proxy hop count in production so req.ip is the real client address
 // and not the load balancer's — that address is stored on every refresh token.
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
-
 app.use(express.json());
 
 /**
@@ -48,6 +47,7 @@ app.get('/health', async (req, res) => {
 });
 
 app.use('/auth', authRouter);
+app.use('/caregiver', caregiverRouter);
 app.use('/emergency', emergencyRouter);
 app.use('/family', familyRouter);
 
