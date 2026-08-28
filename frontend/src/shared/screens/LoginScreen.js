@@ -1,70 +1,9 @@
 // ============================================================================
-// Login screen — TEAMMATE C BUILDS THIS (WORK_DIVISION section 4, Phase 0 step 5)
+// Login screen — ElderCare
 //
-// This file is a placeholder. Replace everything below it with the real login
-// and registration screens. The shell around it is finished: routing, token
-// storage, refresh and role-based navigation all work already, and none of it
-// needs changing.
-//
-// ---------------------------------------------------------------------------
-// WHAT TO BUILD
-// ---------------------------------------------------------------------------
-//
-//   - A phone + password form. Phone is the login identity; email also works
-//     for anyone who registered with one.
-//   - A link across to a registration form: phone, password, full name, role.
-//   - Nothing about role-based routing. Once signIn() is called the app routes
-//     by role on its own — that part is already done.
-//
-// ---------------------------------------------------------------------------
-// WHAT TO CALL
-// ---------------------------------------------------------------------------
-//
-//   import { login, register } from '../api/auth';
-//   import { useAuth } from '../auth/AuthContext';
-//
-//   const { signIn } = useAuth();
-//
-//   // logging in
-//   const response = await login({ phone, password });
-//   await signIn(response);        // <- the entire handover. Nothing else.
-//
-//   // registering — the response has tokens too, so no second login call
-//   const response = await register({ phone, password, fullName, role });
-//   await signIn(response);
-//
-// `signIn` stores both tokens securely and switches the navigator to the home
-// screen for that user's role. There is nothing to navigate to by hand.
-//
-// ---------------------------------------------------------------------------
-// PHONE NUMBERS — DO NOT REFORMAT THEM
-// ---------------------------------------------------------------------------
-//
-// Send the field exactly as the user typed it. The backend normalises to E.164
-// and is the only place that does. `9876543210`, `+91 98765 43210` and
-// `919876543210` all reach the same account already.
-//
-// Show `+91` as a fixed prefix beside a 10-digit field so most people type the
-// plain 10 digits — but do not strip, pad or rewrite what they enter. Two
-// implementations of that rule drift, and then the app and the server disagree
-// about which account a number belongs to.
-//
-// ---------------------------------------------------------------------------
-// HANDLING FAILURES
-// ---------------------------------------------------------------------------
-//
-// Both calls throw on failure. `ApiError` has `.status`, `.code` and
-// `.details`; `NetworkError` means the request never arrived. Branch on
-// `.code`, never on the message text — API.md lists the codes per endpoint.
-//
-//   invalid_credentials  wrong phone/email or password
-//   account_exists       that phone or email is already registered
-//   account_disabled     the account has been deactivated
-//   validation_failed    check `.details` for the per-field messages
-//
-// `validation_failed` returns every bad field at once, which is exactly what a
-// form wants — show each message against its own input rather than one at a
-// time.
+// Production-quality login flow supporting phone number or email address identity,
+// password entry with secure show/hide toggle, client validation, accessible UI,
+// and smooth handover to AuthContext.signIn() for role-based navigation.
 // ============================================================================
 
 import { useState } from 'react';
@@ -83,142 +22,325 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { login } from '../api/auth';
 import { useAuth } from '../auth/AuthContext';
-import { API_URL } from '../config';
 import { colors, spacing, type } from '../ui/theme';
 
-export function LoginScreen() {
-  return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <KeyboardAvoidingView
-        style={styles.fill}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <Text style={styles.title}>ElderCare</Text>
-          <Text style={styles.subtitle}>
-            Placeholder. The real login and registration screens are Teammate C's,
-            Phase 0 step 5 — build them here, replacing this whole file. Instructions
-            and the exact calls to make are in the comment block at the top of
-            {' '}
-            <Text style={styles.code}>src/shared/screens/LoginScreen.js</Text>.
-          </Text>
-
-          <TemporarySignIn />
-
-          <Text style={styles.footnote}>Backend: {API_URL}</Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
-}
-
-// ===========================================================================
-// TEMPORARY — DELETE THIS COMPONENT ALONG WITH THE PLACEHOLDER ABOVE
-//
-// Scaffolding, not a design. It exists so the role-based routing built in this
-// step can actually be exercised on a phone before the real screen lands: sign
-// in as an elderly user and you should arrive at the elderly home screen, as a
-// caregiver at the caregiver one. It calls the same login() and signIn() the
-// real screen will, so it also proves that path works end to end.
-//
-// No validation, no error styling, no registration, no accessibility work. All
-// of that is the real screen's job.
-// ===========================================================================
-
-function TemporarySignIn() {
+export function LoginScreen({ navigation }) {
   const { signIn } = useAuth();
 
-  const [phone, setPhone] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
 
-  async function attempt() {
-    setBusy(true);
+  function validate() {
+    const errs = {};
+    if (!identifier.trim()) {
+      errs.identifier = 'Please enter your email or phone number.';
+    }
+    if (!password) {
+      errs.password = 'Please enter your password.';
+    }
+    setFieldErrors(errs);
+    return Object.keys(errs).length === 0;
+  }
+
+  async function handleLogin() {
     setError(null);
+    setFieldErrors({});
+
+    if (!validate()) {
+      return;
+    }
+
+    setBusy(true);
 
     try {
-      const response = await login({ phone, password });
+      const value = identifier.trim();
+      const isEmail = value.includes('@');
+      const payload = {
+        ...(isEmail ? { email: value } : { phone: value }),
+        password,
+      };
+
+      const response = await login(payload);
       await signIn(response);
     } catch (err) {
-      setError(err.message);
+      if (err.name === 'NetworkError') {
+        setError('Unable to connect to the server. Please check your connection and try again.');
+      } else if (err.code === 'invalid_credentials') {
+        setError('Invalid email/phone or password.');
+      } else if (err.code === 'account_disabled') {
+        setError('This account has been deactivated. Please contact support.');
+      } else if (err.code === 'validation_failed' && Array.isArray(err.details)) {
+        const mappedErrs = {};
+        err.details.forEach((item) => {
+          if (item.field === 'phone' || item.field === 'email') {
+            mappedErrs.identifier = item.message;
+          } else if (item.field) {
+            mappedErrs[item.field] = item.message;
+          }
+        });
+        setFieldErrors(mappedErrs);
+        setError('Please check your input and try again.');
+      } else {
+        setError(err.message || 'An unexpected error occurred. Please try again.');
+      }
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <View style={styles.devCard}>
-      <Text style={styles.devHeading}>Temporary — Teammate C deletes this</Text>
-      <Text style={styles.devNote}>
-        Scaffolding so role-based routing can be tested before the real screen exists.
-        Not a design, and not the login screen — no validation, no registration, no
-        accessibility work.
-      </Text>
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={styles.fill}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Branding Header */}
+          <View style={styles.header}>
+            <Text style={styles.title}>ElderCare</Text>
+            <Text style={styles.subtitle}>Welcome back! Sign in to access your account.</Text>
+          </View>
 
-      <TextInput
-        style={styles.input}
-        value={phone}
-        onChangeText={setPhone}
-        placeholder="Phone, e.g. 9876543210"
-        keyboardType="phone-pad"
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
-      <TextInput
-        style={styles.input}
-        value={password}
-        onChangeText={setPassword}
-        placeholder="Password"
-        secureTextEntry
-        autoCapitalize="none"
-      />
+          {/* Global Error Banner */}
+          {error ? (
+            <View style={styles.errorBanner} accessibilityRole="alert">
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : null}
 
-      <Pressable style={styles.button} onPress={attempt} disabled={busy}>
-        {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign in</Text>}
-      </Pressable>
+          {/* Form */}
+          <View style={styles.form}>
+            {/* Phone or Email Identifier */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Phone Number or Email</Text>
+              <TextInput
+                style={[styles.input, fieldErrors.identifier ? styles.inputError : null]}
+                value={identifier}
+                onChangeText={setIdentifier}
+                placeholder="Enter mobile number or email"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                accessibilityLabel="Phone number or email address"
+              />
+              {fieldErrors.identifier ? (
+                <Text style={styles.fieldErrorText}>{fieldErrors.identifier}</Text>
+              ) : null}
+            </View>
 
-      {error && <Text style={styles.error}>{error}</Text>}
-    </View>
+            {/* Password */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.passwordContainer}>
+                <TextInput
+                  style={[
+                    styles.input,
+                    styles.passwordInput,
+                    fieldErrors.password ? styles.inputError : null,
+                  ]}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="Enter your password"
+                  placeholderTextColor={colors.textMuted}
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  accessibilityLabel="Password"
+                />
+                <Pressable
+                  style={styles.toggleButton}
+                  onPress={() => setShowPassword((prev) => !prev)}
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  <Text style={styles.toggleText}>{showPassword ? 'Hide' : 'Show'}</Text>
+                </Pressable>
+              </View>
+              {fieldErrors.password ? (
+                <Text style={styles.fieldErrorText}>{fieldErrors.password}</Text>
+              ) : null}
+            </View>
+
+            {/* Sign In Main Button */}
+            <Pressable
+              style={({ pressed }) => [
+                styles.submitButton,
+                busy ? styles.submitButtonDisabled : null,
+                pressed && !busy ? styles.submitButtonPressed : null,
+              ]}
+              onPress={handleLogin}
+              disabled={busy}
+              accessibilityRole="button"
+              accessibilityLabel="Sign in to ElderCare"
+            >
+              {busy ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.submitButtonText}>Sign In</Text>
+              )}
+            </Pressable>
+          </View>
+
+          {/* Registration Navigation Link */}
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>Don't have an account?</Text>
+            <Pressable
+              onPress={() => navigation.navigate('Register')}
+              accessibilityRole="button"
+              accessibilityLabel="Go to registration"
+              hitSlop={12}
+            >
+              <Text style={styles.registerLink}> Register</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  fill: { flex: 1 },
-  content: { padding: spacing.md, gap: spacing.md, flexGrow: 1, justifyContent: 'center' },
-  title: { fontSize: type.title, fontWeight: '700', color: colors.text, textAlign: 'center' },
-  subtitle: { fontSize: type.body, color: colors.textMuted, textAlign: 'center' },
-  code: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: type.small },
-  devCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: colors.border,
-    padding: spacing.md,
-    gap: spacing.sm,
-    marginTop: spacing.lg,
-  },
-  devHeading: { fontSize: type.small, fontWeight: '700', color: colors.danger, textTransform: 'uppercase' },
-  devNote: { fontSize: type.small, color: colors.textMuted, marginBottom: spacing.sm },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 4,
-    fontSize: type.body,
-    color: colors.text,
+  safe: {
+    flex: 1,
     backgroundColor: colors.background,
   },
-  button: {
-    backgroundColor: colors.primary,
-    borderRadius: 8,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
+  fill: {
+    flex: 1,
   },
-  buttonText: { color: '#fff', fontSize: type.body, fontWeight: '600' },
-  error: { color: colors.danger, fontSize: type.small },
-  footnote: { fontSize: type.small, color: colors.textMuted, textAlign: 'center' },
+  content: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: spacing.xl,
+  },
+  title: {
+    fontSize: type.title + 6,
+    fontWeight: '800',
+    color: colors.primary,
+    letterSpacing: 0.5,
+    marginBottom: spacing.xs,
+  },
+  subtitle: {
+    fontSize: type.body,
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  errorBanner: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: 10,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  errorText: {
+    color: colors.danger,
+    fontSize: type.body - 1,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  form: {
+    gap: spacing.md + 2,
+  },
+  inputGroup: {
+    gap: 6,
+  },
+  label: {
+    fontSize: type.body,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  input: {
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 14,
+    fontSize: type.body,
+    color: colors.text,
+    minHeight: 52,
+  },
+  inputError: {
+    borderColor: colors.danger,
+  },
+  fieldErrorText: {
+    color: colors.danger,
+    fontSize: type.small,
+    fontWeight: '500',
+  },
+  passwordContainer: {
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  passwordInput: {
+    paddingRight: 70,
+  },
+  toggleButton: {
+    position: 'absolute',
+    right: 12,
+    height: '100%',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  toggleText: {
+    fontSize: type.body - 1,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  submitButton: {
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 54,
+    marginTop: spacing.sm,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  submitButtonDisabled: {
+    opacity: 0.6,
+  },
+  submitButtonPressed: {
+    opacity: 0.85,
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: type.body + 1,
+    fontWeight: '700',
+  },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: spacing.xl + 8,
+  },
+  footerText: {
+    fontSize: type.body,
+    color: colors.textMuted,
+  },
+  registerLink: {
+    fontSize: type.body,
+    fontWeight: '700',
+    color: colors.primary,
+  },
 });

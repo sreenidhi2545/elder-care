@@ -290,6 +290,30 @@ If all three of those work, your environment is fully set up.
 
 ---
 
+## 10. Building a preview APK for a phone (optional)
+
+Everything above (`npx expo start` + Expo Go) is enough for day-to-day development. This section is only for producing an installable `.apk` via `eas build --profile preview` — e.g. to test on a device without Expo Go, or to hand a build to someone else.
+
+**`EXPO_PUBLIC_API_URL` must be set as an EAS environment variable before you build.** A preview build has no Metro attached at runtime to auto-detect a host from (unlike Expo Go/dev-client) and a cloud `eas build` cannot see your local `frontend/.env` (it's gitignored on purpose — an IP address is specific to your machine and network, and committing one breaks the build for every teammate the moment their router hands out a different address, or the moment yours does). Set it once per environment instead:
+
+```powershell
+eas env:create --scope project --name EXPO_PUBLIC_API_URL --environment preview --value "http://<your-laptop-ip>:5000" --visibility plaintext --non-interactive
+```
+
+Find `<your-laptop-ip>` with `ipconfig` — look for "IPv4 Address" under your Wi-Fi adapter, same as section on troubleshooting above. Re-run this command (it overwrites the existing value) any time that IP changes — a new network, a router reassignment, a different laptop.
+
+Then build as usual:
+
+```powershell
+eas build --profile preview --platform android --non-interactive
+```
+
+**If `EXPO_PUBLIC_API_URL` isn't set for the environment you're building, the build fails immediately** — `frontend/app.config.js` checks for it before anything is bundled, with an error naming exactly what's missing. This is deliberate: an earlier version of this project let a preview build silently succeed with no backend address baked in at all, producing an APK that looked fine but could never reach a server from any network. See `BUILD_LOG.md`'s 2026-08-26 entry for the full story — the fast, loud failure here exists specifically so that can't happen again unnoticed.
+
+**⚠️ `frontend/app.config.js` currently also enables `usesCleartextTraffic` via the `expo-build-properties` plugin — temporary, local-dev-only, and it must not reach a production build.** Without it, Android blocks every plain `http://` request an app makes by default (any `targetSdkVersion` 28+, which includes this project) — even once `EXPO_PUBLIC_API_URL` resolves correctly, the app still can't reach a backend at a bare `http://<ip>:5000` address without this. It exists only because a preview build during development talks to a LAN IP over plain HTTP. **Before any production build:** either replace it with a `network_security_config.xml` scoped to private/local IP ranges only, or drop it entirely once the backend is reachable over `https://`. Don't carry this into a production build by habit — see `BUILD_LOG.md`'s 2026-08-26 entries for why this exists at all, and for why it has to go through `expo-build-properties` specifically rather than a bare `android.usesCleartextTraffic` key (that key alone does nothing — checked the hard way, twice).
+
+---
+
 ## Troubleshooting
 
 These are the specific problems the team actually hit while setting this project up (recorded in `BUILD_LOG.md`), in the order you're likely to hit them.
@@ -318,7 +342,9 @@ This is almost always one of:
 - **Windows Firewall blocking the connection.** The first time you run `npm start` in `frontend/`, Windows may pop up a firewall prompt asking whether to allow Node.js to communicate on private networks — click **Allow**. If you missed that prompt, open Windows Defender Firewall settings, find Node.js in "Allow an app through firewall," and make sure Private networks is checked.
 - **The backend isn't actually running.** Check terminal 1 — if `npm start` in `backend/` crashed or isn't showing a listening message, the phone has nothing to reach. Fix that first and confirm with the `/health` check in section 9 before worrying about networking.
 
-The app figures out your laptop's address automatically (it reuses the same address Expo uses to send the phone its code, via `src/shared/config.js`) — you shouldn't need to type an IP address anywhere. If it's still not resolving, you can force it: add `"apiUrl": "http://<your-laptop-ip>:5000"` inside `expo.extra` in `frontend/app.json` (find your laptop's IP with `ipconfig` — look for "IPv4 Address" under your Wi-Fi adapter). Do not set it to `null` — Expo turns a `null` there into `{}`, which the app was once tricked into treating as a valid address, producing a backend URL of the literal string `"[object Object]"`.
+**This section is about the Expo Go / dev-client flow (section 8.2/8.3) only.** There, the app figures out your laptop's address automatically — it reuses the same address Expo uses to send the phone its code, via `src/shared/config.js` — so you shouldn't need to type an IP address anywhere. If it's still not resolving, you can force it for your machine only: copy `frontend/.env.example` to `frontend/.env` and set `EXPO_PUBLIC_API_URL=http://<your-laptop-ip>:5000` (find your IP with `ipconfig` — look for "IPv4 Address" under your Wi-Fi adapter). That file is gitignored — it never leaves your machine, so it can't break anyone else's setup or go stale in the repo.
+
+**Building an installable APK (a preview or production build via `eas build`) is a different mechanism — see section 10 below.** Those builds have no Metro to auto-detect from and no `.env` file available to a cloud build worker, so `EXPO_PUBLIC_API_URL` must be set as an EAS environment variable before building, or the build refuses to run rather than silently producing an app that can never reach a server. This is a lesson learned the hard way — see `BUILD_LOG.md`'s 2026-08-26 entry.
 
 ### "It says package.json not found" / commands failing for no obvious reason
 

@@ -4,6 +4,8 @@ A running record of what was built, when, and why. Each entry says what changed,
 
 **How to use this file:** append an entry after every completed step, and commit the log update in the same commit as the work it describes. Newest entries go at the bottom. Write it so someone who was not watching the build can follow it — plain English, no shorthand.
 
+**Rule, stated plainly because it has drifted before (see the 2026-08-15 audit entry below): every commit that changes code also updates this file, in that same commit.** A log-only commit (fixing a stale entry, backfilling a gap) is fine. A code commit with no log entry is not — not even for something that feels too small to write up. If it's small, the entry is one sentence.
+
 Entries before 2026-08-12 were reconstructed from the git history and the files themselves, so they record the decisions but not always the discussion behind them.
 
 ---
@@ -316,6 +318,7 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 ### Closed
 
 - **Phone numbers not normalised** — closed 2026-08-12. Normalised to E.164 in `backend/shared/phone.js`, applied by both `validateRegister` and `validateLogin`, documented in `API.md`, existing rows migrated. See the entry above.
+- **Whether `can_acknowledge_alerts` should also permit cancelling an alert, not just resolving it** — closed 2026-08-15. Decided against: `cancel` stays owner-only. See the Phase 1 step 3 entry below for the recommendation and why.
 
 ### Open
 
@@ -332,6 +335,7 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 - **`caregivers.average_rating` and `total_reviews`** are not maintained by the database. Whoever builds reviews in Phase 4 must recalculate them in the same transaction that writes the review.
 - **Overlapping caregiver visits** are not prevented by the database, only identical start times. The application has to check.
 - **Identity document numbers** are deliberately not stored. If the client requires them, the answer is a hash plus the document in a separate access-controlled store — not a plain column.
+- **The SOS button flow is unverified on a real device.** Bundling proves it compiles; it does not prove the 5-second countdown, the confirm-to-cancel step, or the polling behaviour hold up under an actual press on an actual phone. See the 2026-08-15 entry below.
 
 ---
 
@@ -347,9 +351,17 @@ It states plainly near the top that this is an Expo/React Native mobile app, not
 
 ---
 
+## 2026-08-14 — Lockfiles updated (`9b495c5`)
+
+**Backfilled 2026-08-15** — this commit had no log entry at the time; see the audit entry below.
+
+`backend/package-lock.json` and `frontend/package-lock.json` updated to match `package.json` after routine dependency work earlier the same day. No dependency was added or removed and no version was deliberately bumped; this is `npm install` recording an already-current lockfile, not a decision. Twelve lines changed, nothing to verify beyond `npm install` completing clean.
+
+---
+
 ## 2026-08-14 — Merge conflict: a Vite scaffold under `frontend/`
 
-**What happened.** Before the Expo shell (2026-08-12, above) was merged, a teammate had separately scaffolded a Vite web app directly into `frontend/` on `main` — `frontend/index.html`, `frontend/src/main.jsx` (a plain `react-dom` app), and a stray root-level `package-lock.json` with no matching root `package.json`, evidently left over from running `npm install` at the repository root by mistake. Landing that on `main` before the Expo work merged meant the pull request from `feature/emergency` into `main` conflicted on `frontend/package.json` and `frontend/package-lock.json` — one side had Expo and React Native, the other had Vite and `react-dom` for the same file.
+**What happened.** Before the Expo shell (2026-08-12, above) was merged, a teammate had separately scaffolded a Vite web app directly into `frontend/` on `main` (`2c5a24e`, merged via PR #2 from `feature/caregiver`) — `frontend/index.html`, `frontend/src/main.jsx` (a plain `react-dom` app), and a stray root-level `package-lock.json` with no matching root `package.json`, evidently left over from running `npm install` at the repository root by mistake. Landing that on `main` before the Expo work merged meant the pull request from `feature/emergency` into `main` conflicted on `frontend/package.json` and `frontend/package-lock.json` — one side had Expo and React Native, the other had Vite and `react-dom` for the same file.
 
 **Why Expo won outright, not a merge of both.** This project is a mobile app that runs on a phone through Expo Go — see `SETUP.md`'s opening section. A web frontend under the same folder is not a second flavour of the same app; Expo and Vite cannot coexist in one `package.json`, and nothing in any project document describes a web client. The Vite scaffold was scope creep from before the module folders existed, not a parallel feature.
 
@@ -358,3 +370,679 @@ It states plainly near the top that this is an Expo/React Native mobile app, not
 Rather than discard an already-pushed merge commit and force-push a from-scratch redo, the fix was applied on top of it: pull the existing merge, delete the three leftover files, and push normally as a fast-forward. Confirmed afterwards — `git grep` for `vite` and `react-dom` across the tracked tree turns up nothing but coincidental substring matches (`invited_by`, a base64 hash), `frontend/package.json` lists only `expo` and `react-native`, and `npx expo config` still resolves `sdkVersion: '54.0.0'`. `backend/shared/db/schema.sql` was left untouched — the teammate's encoding fix for the mangled em dash (`9d169cd`, already covered by 2026-08-08 above) came through the merge cleanly and stays.
 
 **Worth knowing for next time, with three people on one repository:** an automated conflict-resolution pass (Copilot's or otherwise) can fix the conflict markers correctly and still leave scope creep behind, because non-conflicting new files never get its attention. Reviewing "does this pull request still contain files it shouldn't" is a separate question from "does this pull request have conflicts," and answering the first one is still a human's job even after the second is automated away.
+
+---
+
+## 2026-08-15 — Phase 1, step 1: the SOS button and the alert record
+
+Deliberately scoped to just the button and the `alerts` row it creates. No GPS capture, no notification fanout to emergency contacts — those are separate steps, tracked as open items below rather than built ahead of being asked for.
+
+### Backend — `backend/emergency/{alerts.js, validate.js, routes.js}`, mounted at `/emergency` in `app.js`
+
+Five endpoints, all reusing the existing `requireAuth`/`requireRole` middleware and `ApiError` shape from Phase 0 — no new patterns introduced. Full request/response shapes are in `API.md` under "Emergency alerts"; this entry covers the decisions and the alternatives rejected.
+
+- **`POST /emergency/alerts` has no role check**, only `requireAuth`, scoped to the caller's own `user_id`. Nothing in the requirement said this must be `elderly`-only, and the elderly home screen's UI is what actually restricts who presses it in practice. Rejected: gating the endpoint to `elderly` — that would block a future case (a family member's own SOS, say) without being asked to, and the API layer restricting by role when the product spec didn't is exactly the kind of building-ahead this step was told not to do.
+
+- **One active SOS at a time per person.** A second `POST` while one is already `active` returns `409 sos_already_active` with the existing alert attached, rather than creating a duplicate row. Rejected: allowing multiple concurrent active SOS alerts for the same user — a shaky or repeated press is overwhelmingly the same emergency, not two, and duplicate active alerts would mean duplicate entries on the family screen for one event. The frontend treats this 409 as reassurance ("help is already on the way"), never as an error — a person pressing SOS must never be shown an error screen for the crime of pressing it twice.
+
+- **`severity` is hardcoded to `'critical'`, not accepted from the client.** An SOS press is definitionally the most urgent thing this product records; asking the person pressing it to also grade their own emergency adds a decision at the exact moment decisions are hardest. `alert_type` is likewise fixed to `'sos'` — this endpoint is the SOS button, not a general alert-creation endpoint.
+
+- **`cancel` and `resolve` are two separate endpoints, not one endpoint with an action field**, because they mean different things and are permitted to different people:
+  - **Cancel** ("that was a mistake") is owner-only. Only the person who pressed it can say it was pressed by accident.
+  - **Resolve** ("this is handled") is available to the owner or to a family member with an `active` `family_links` row and `can_acknowledge_alerts: true`. Family are often the ones actually responding, so they need a way to close it out.
+
+  Rejected: a single `PATCH .../status` endpoint taking `{ action: 'cancel' | 'resolve' }`. It would have made the permission check a branch inside one handler instead of the route table itself documenting who can do what — worse for a document meant to be read by someone still learning the codebase.
+
+- **Both `cancel` and `resolve` only act on a row that is still `status = 'active'`**, checked in the same `UPDATE ... WHERE id = $1 AND status = 'active'` statement rather than a read-then-write. Two simultaneous requests — say, the elderly user cancels at the same moment a family member resolves — can then only ever have one winner; the loser gets `409 alert_not_active` and re-reads the real state, rather than both succeeding and silently overwriting each other's `resolved_by`.
+
+- **`GET /emergency/family/alerts` — decision (B), confirmed with you before building:** every alert is shown for every elderly user with an `active` family link, regardless of `can_acknowledge_alerts`; each alert carries a `canAcknowledge` flag so the screen knows whether to offer a "mark resolved" button. Rejected: (A), hiding the alert entirely from view-only family members — a distant relative with view-only access still needs to know their grandparent pressed SOS, they just should not be the one closing it out. The `resolve` endpoint enforces the permission server-side regardless of what the screen shows, so (B) is not a security gap, only a friendlier default.
+
+- **Alert ids are checked against a UUID pattern before hitting the database**, returning `400 validation_failed` for a malformed id rather than letting Postgres throw and the generic error handler turn it into an opaque `500`.
+
+- **Added `notFound()` to `shared/http/errors.js`.** Every other status helper (`badRequest`, `unauthorized`, `forbidden`, `conflict`) already existed from Phase 0; `404` was the one auth never needed until an endpoint took an id in the URL.
+
+### Frontend — `frontend/src/emergency/{api/alerts.js, screens/ElderlyHomeScreen.js, screens/FamilyHomeScreen.js}`
+
+- **`ElderlyHomeScreen` is a five-second, cancellable countdown between the press and the request leaving the device**, per your instruction — raised from the three seconds I first proposed, to give someone with tremor or poor eyesight real time to cancel. Nothing is sent to the server until the countdown reaches zero, which is what stops a pocket press from ever reaching the backend at all — not a debounce or a confirmation dialog after the fact, but simply not making the request yet.
+
+- **Cancelling a live alert is behind its own one-tap confirmation** ("Are you sure you're safe?"), separate from the pre-send countdown. Dismissing a real, already-active emergency should not be exactly as easy as arming one — the countdown protects against an accidental press; this second, lighter gate protects against an accidental cancel.
+
+- **`sos_already_active` is handled as a distinct case, not passed through generic error handling.** The screen shows "Help is already on the way" and re-fetches the real alert state, and never renders this particular response as an error banner — per your instruction that someone pressing SOS must never see an error for doing so.
+
+- **Polling, not WebSockets, for both screens** — the real-time layer is Phase 3. Interval is adaptive per your instruction: 10 seconds while there is an alert to watch (active on the elderly screen; one or more in the family list), 20 seconds otherwise. This is flagged here explicitly as an interim mechanism, superseded when Phase 3's WebSocket layer lands, not a permanent design.
+
+- **A background poll failing does not overwrite a screen that is already showing correctly.** Only the initial load surfaces a "could not reach the server" banner; a subsequent silent poll that fails just leaves the last known state on screen and tries again next interval, rather than replacing a real alert list with an error every time one request times out.
+
+### Verified
+
+Backend: server started against the real `eldercare` database, seeded test accounts (`backend/scripts/seed-test-users.js`, re-run with a known password for this session) logged in as `elderly` and `family`. Exercised directly against the running server, not just read from the code: empty alert list before any alert exists; `POST /emergency/alerts` creates one; a second `POST` returns `409 sos_already_active` with the existing alert attached rather than creating a duplicate; a family member with `can_acknowledge_alerts: false` sees the alert in `GET /emergency/family/alerts` with `canAcknowledge: false` and is rejected with `403 not_permitted` on `resolve`; flipping the permission to `true` lets the same request succeed; a non-owner is rejected with `403 not_alert_owner` on `cancel`; resolving or cancelling twice returns `409 alert_not_active`; an unknown id returns `404 alert_not_found`; a malformed id returns `400 validation_failed` before touching the database; a request with no `Authorization` header returns `401 missing_token`. All test rows created during this were deleted afterwards.
+
+Frontend: `npx expo export --platform android` bundled cleanly, 839 modules, no unresolved imports — the same check Phase 0 used, proving the import graph from the entry point through both new screens compiles. **Not verified on a device** — nobody exercised the countdown, the confirm-to-cancel step, or the polling behaviour by actually pressing the button on a phone. That is real risk for a screen whose entire job is working correctly under stress; see "Open issues" below.
+
+### Left open — noted for you to decide, not decided here
+
+**Should `can_acknowledge_alerts` also permit cancelling, not just resolving?** Right now only the alert's owner can `cancel` — a family member with full acknowledge permission cannot. You asked for this to be left open rather than decided now. The case for extending it: a family member who has just spoken to the elderly person and confirmed it was a false alarm has no way to close it as anything other than "resolved," which is a different fact than "this was a mistake." The case against: cancel exists specifically to mean "the person who pressed it says it wasn't real," and a family member — even a trusted one — wasn't the one who pressed it, so their saying so is a different, weaker claim. Whichever way this goes, it is a one-line permission change in `routes.js`, not a schema change.
+
+**Not built, on purpose, per this step's scope:** GPS capture on the alert (`latitude`/`longitude` stay `null`), any write to `emergency_contacts`, any row in `notifications`, any SMS/call/push. These are the next two steps.
+
+**`ElderlyHomeScreen`'s initial "is there already an active alert" check fails open.** If `GET /emergency/alerts?status=active` fails on load (no network yet, say), the screen defaults to showing the idle SOS button rather than blocking on the check — the reasoning being that a broken background check must never be able to hide the SOS button from someone who needs it. The tradeoff: if that check's failure coincides with an alert that actually is active, the screen briefly shows "idle" until the create call's own `409` corrects it. Worth knowing if it ever looks like the screen "forgot" an active alert for a moment after a cold start with a flaky connection.
+
+**Not verified on a real device.** Bundling proves the code compiles; it does not prove the five-second countdown feels right, that the confirm-to-cancel step is easy to find under stress, or that polling behaves correctly when a phone's network drops and returns. This should happen before this step is considered actually done, not just committed.
+
+---
+
+## 2026-08-15 — Local credentials rotated
+
+Two passwords changed on the local development environment. Neither value is recorded here or anywhere else in the repository — `.env` is the only place either lives, and it stays gitignored.
+
+**The `postgres` role's database password was changed.** `DATABASE_URL` in the repo-root `.env` was updated to match by a script that read the old value out of `.env`, used it to connect and issue `ALTER USER`, then rewrote the file — the old password was never printed to a terminal or logged anywhere in the process. The running backend was restarted afterwards, since `shared/config/env.js` reads `.env` once at startup and freezes the result; a password rotation does not take effect in an already-running process. Verified with `GET /health` returning `db.connected: true` against the new credentials, and confirmed `.env` still shows as ignored (`git check-ignore -v .env`) and untracked (`git status`).
+
+**The four seeded test accounts' shared password was changed**, by re-running `backend/scripts/seed-test-users.js` — the script upserts on phone number, so this reset the existing four rather than creating new ones. The password requested was 5 characters; the seed script enforces the same `PASSWORD_MIN_LENGTH` (8) that registration does and refused to run, so it was padded to meet that minimum rather than the rule being loosened — the rule exists for real registrations too, not just this script. Verified by logging in as all four seeded numbers (`9000000001`–`9000000004`) and confirming each still returns its expected role.
+
+---
+
+## 2026-08-15 — Build log audit: the append-and-commit-together rule had drifted
+
+Run because the rule at the top of this file — append an entry after every completed step, commit it with the work — was suspected of not having been followed consistently since the very first (2026-08-05) session. It hadn't been, though not in the way expected.
+
+**Method:** `git log --oneline -- BUILD_LOG.md` (commits that actually touched this file) compared against the full commit history on this branch (`git log --oneline --all`).
+
+**What the comparison found:**
+
+- **Every commit before 2026-08-12 is a non-issue.** None of them individually touch `BUILD_LOG.md`, but the file's own header already discloses this — those entries were written in one pass, reconstructed from the git history and the code, not committed alongside the work in real time. Disclosed drift isn't silent drift.
+- **One real, undisclosed gap: `9b495c5` ("Update lockfiles", 2026-08-14).** A routine lockfile-sync commit with no log entry at all, not mentioned anywhere in the file. Small — 12 lines, no decisions — but the rule doesn't carve out an exception for small. Backfilled above.
+- **One traceability gap, not a content gap: `2c5a24e`** (the Vite-scaffold commit, merged from `feature/caregiver` via PR #2). The event it caused was already fully narrated in the "Merge conflict: a Vite scaffold" entry above, just without the commit hash tying the narrative to the actual commit. Added the hash for precision; no content was missing.
+- **The largest gap: the SOS button feature (Phase 1, step 1) and the credential rotation, both dated 2026-08-15 above, existed only in the uncommitted working tree at the time of this audit.** The code (`backend/emergency/alerts.js`, `routes.js`, `validate.js`, the frontend `emergency/api/` client, both home screens, the `API.md` update) and the matching log entries had both already been written — checked against `git reflog` and against `origin/main`'s merge history (`dafc85d`), neither of which contains any of it — but nothing had been committed. This is a stricter violation than a missing log entry: the rule assumes work gets committed *promptly*, with the log riding along: here the log was actually ahead of git, correct and complete, but sitting in a working tree with no commit at all backing it. Resolved by committing the SOS feature (code + its log entry) as one commit and the credential-rotation note (log-only, since that action left no code diff) as a separate one, both immediately after this audit entry.
+
+**Going forward:** the header above now states the rule explicitly rather than leaving it to be remembered. It's also saved to this session's persistent memory, so it doesn't depend on either the header being read or the memory alone — either should be enough on its own to catch the next drift before it reaches six commits.
+
+---
+
+## 2026-08-15 — Family dashboard: alert history
+
+Found by using the app, not by reading a spec: the family screen only ever showed *active* alerts, so a cancelled SOS — pressed, then said to be a mistake — vanished with no trace. A family member who wasn't watching at that exact moment never learns it happened. Someone might cancel out of embarrassment or confusion right after a real scare, which is exactly the case where the family finding out later matters most. No requirements document was going to catch this; it only showed up from pressing the button and then checking what the other screen did and didn't display.
+
+### Backend — `GET /emergency/family/alerts/history`, new endpoint
+
+**A new endpoint, not a parameter on `GET /emergency/family/alerts`.** The active-alerts endpoint is polled every 10–20 seconds from the family screen; folding a 7-day historical join into that same query would mean re-running it on every poll tick for data that barely changes. Rejected: an `?include=history` flag on the existing route — cheaper to build, but it makes the cheap, frequent poll do expensive, infrequent work every single time.
+
+- **Same `family_links` gating as the active list**, including the existing decision that a view-only family member (`can_acknowledge_alerts: false`) still sees every alert for people they're linked to — that decision was about visibility, not about which alerts exist, and history is still visibility.
+- **Filtered to `status IN ('resolved', 'cancelled')` and `triggered_at >= now() - 7 days`,** capped by a `limit` query parameter (default 20, max 50 — same shape as `GET /emergency/alerts`'s limit). The 7-day window itself is fixed, not caller-configurable — "last 7 days" is a sensible default for a dashboard, not a report; a family member wanting older history than that is a different feature (a full audit log), not this one.
+- **No new index.** `idx_alerts_user_time (user_id, triggered_at DESC)`, already in the schema, covers the per-elderly-user lookup this query does via the `family_links` join. Checked, not assumed.
+- **Added `resolvedByName` and `resolvedByIsSelf` to the row shape**, via a `LEFT JOIN users` on `resolved_by`. `status` alone doesn't say who closed it: cancel is always the alert's own owner (only they can cancel — see the 2026-08-15 SOS entry above), but resolve can be the owner *or* a permitted family member. Without this, "resolved" would read the same whether the elderly person handled it themselves or a family member did, and the whole point of this feature is telling those apart.
+
+### Frontend — `FamilyHomeScreen.js`, "Recent alerts" section
+
+- **History is fetched in the same `load()` call as the active list** (`Promise.all`), on the screen's existing poll cadence, rather than a second independent interval. Simpler — one loading state, one banner, one poll loop — and the history query is capped and indexed, so running it every 10–20 seconds isn't a real cost yet. This was raised with you explicitly as the one open design choice; the alternatives were a slower dedicated interval (decouples the two, more moving parts) or folding into the active endpoint (rejected above for the same reason). You confirmed this option.
+- **Duration is computed on the device, from `triggeredAt`/`resolvedAt`, not returned pre-formatted by the server.** Matches how the active list already computes "X minutes ago" client-side — timestamps are the source of truth, formatting is a presentation concern. Plain-language output: "Active for 4 minutes", "Active for 1 hour 12 minutes", "Active for 2 days".
+- **Triggered time shown via `toLocaleString()`, no date-formatting library.** Consistent with the project's existing stance of reaching for a dependency only when the built-in isn't enough (see: no HTTP client library, no `libphonenumber` yet) — a 7-day-old timestamp doesn't need more than the platform's own locale formatting.
+- **Ended-by line distinguishes three cases, not two.** The ask was "cancelled by them / resolved by family", but resolve isn't only ever done by family — the elderly person can resolve their own alert too. Built all three: "Cancelled by \<name\> — they said it was a mistake", "Marked resolved by \<name\>" (self), "Resolved by \<name\> (family)".
+- **Not shown, on purpose:** `resolutionNotes`. Not asked for, and the project's existing discipline (see the SOS entry above) is not to build past what's actually been requested.
+
+### Verified
+
+Backend, against the running server and the real `eldercare` database: empty history for a family member before any alert existed; a cancelled alert (elderly presses SOS, then cancels) appears with `resolvedByName` equal to the elderly user's own name and `resolvedByIsSelf: true`; a fresh alert resolved by the family member appears with `resolvedByIsSelf: false` and `resolvedByName` equal to the family member's name; `limit` caps the result count; a non-`family` caller (tried both `elderly` and `admin`) gets `403 insufficient_role`; a non-numeric `limit` gets `400 validation_failed`. The test alert created for this session was deleted afterwards; three pre-existing cancelled test alerts from earlier SOS verification were left in place — harmless, and useful as real data for exercising this section on a device.
+
+Frontend: `npx expo export --platform android` bundled cleanly, 839 modules, same check as every prior step.
+
+**Not verified on a device** — same gap as the rest of Phase 1 step 1. Nobody has scrolled a real family dashboard and read a "Recent alerts" card at arm's length yet.
+
+---
+
+## 2026-08-15 — Phase 1, step 2: GPS location
+
+Scope, deliberately: capture and storage only. No geofencing (Phase 3), no map UI, no notifications (step 3). Two things: a general-purpose location endpoint, and location captured specifically at SOS press time and written onto the alert itself.
+
+### New dependencies — `expo-location`, `expo-battery`
+
+Both added via `npx expo install` so they match SDK 54, same as every other native module in this project. `expo-location`'s config plugin was added to `app.json` with a custom `locationWhenInUsePermission` string — inert under Expo Go today (plugin config only applies on prebuild/dev-client), but correct and in place for when the dev build the project already knows is coming (see the 2026-08-12 SDK-downgrade entry's open issues) actually happens. Foreground-only; background location needs that same dev build and is not attempted here.
+
+### Backend — `backend/emergency/locations.js`, new file; `alerts.js`, `validate.js`, `routes.js` extended
+
+**`POST /emergency/locations`, a new endpoint — writes one row to the existing `locations` table.** `latitude`/`longitude` required, `accuracyMeters`/`batteryLevel`/`recordedAt` optional. Not role-gated at the API layer, same reasoning as `POST /emergency/alerts` from step 1: scoped to the caller's own account, restricted to the elderly screen by the app's UI rather than the server. `recordedAt` defaults to `now()` but accepts the device's own fix time, since a reading can be taken a moment before the request actually arrives.
+
+**`POST /emergency/alerts` gains optional `latitude`/`longitude`, written straight onto the alert's own columns in the same `INSERT`.** Both required together if either is sent; both stay `null` if omitted, exactly as before this step.
+
+**Rejected: also inserting a `locations` row for the SOS-time capture and linking it via `alerts.location_id`.** The schema comment already explains why alerts carry their own copy — the FK exists in the design, but nothing today reads `location_id`, and creating a row nothing joins against is complexity with no consumer. `location_id` stays `NULL`. If something later needs the fuller reading (accuracy, battery) that was captured at SOS time and not just the coordinates, that's a small addition then, not a redesign now.
+
+**Never a precondition — this was the load-bearing requirement, not a nice-to-have.** `validateSosAlertBody` treats a missing location as entirely valid, not an error; the endpoint has no code path where a location problem prevents the `INSERT`. The client-side half of "never delay" is in the frontend section below — the two halves only work together.
+
+**`family_links.can_view_location` gating added to both `listActiveFamilyAlerts` and `listFamilyAlertHistory`.** Both queries now select the flag; a new `withLocationGate` helper redacts `latitude`/`longitude` to `null` and adds a `canViewLocation` field when it's `false` — same shape and same reasoning as `canAcknowledge` from step 1, a different permission gating a different action (viewing vs. closing). Enforced in the query layer so a view-only-location family member can't see coordinates no matter what the app does with the response. Applied to **both** endpoints — active and history — even though the family screen (below) only renders coordinates on active cards today. The permission is about the data, not about which screen currently happens to display it; leaving history ungated because nothing reads it yet would be a gap waiting to be found the same way the missing history section itself was found in the previous entry.
+
+### Frontend — `shared/location/captureLocation.js` (new), `emergency/api/locations.js` (new), `emergency/api/alerts.js`, both home screens
+
+**One shared capture helper, not two separate implementations.** `captureCurrentLocation({ timeoutMs })` wraps permission-checking, `Location.getCurrentPositionAsync`, and a best-effort `expo-battery` read behind a single function that **never throws** — permission denied, no fix in time, GPS off, or a genuine hardware error all just resolve to `null`. Every caller branches on "did I get a reading," nothing else. Used from two call sites with different urgency:
+
+- **`ElderlyHomeScreen`'s "Location sharing" card** — a plain-language explanation shown *before* the OS permission prompt, per the requirement, not left to the system dialog's own generic wording. Three states: not-yet-asked (rationale + "Enable" button), granted (auto-captures once on mount, posts to `POST /emergency/locations`, fire-and-forget — a failed background share is not something to alarm an elderly user about), denied (reassurance that SOS still works, plus an "Open settings" link, since `expo-location` won't re-prompt a permission the user already said no to). **Deliberately foreground, one-shot on mount — no periodic or background capture.** That's continuous live tracking, which is explicitly Phase 3's job, and would need the dev build this project doesn't have yet regardless. Logged below rather than half-built here.
+
+- **The SOS countdown** — capture starts the instant the 5-second countdown begins, with an internal timeout (4.5s) shorter than the countdown itself. By the time the countdown reaches zero and `fireSos` runs, the capture promise has *already settled* — a reading or `null` — so awaiting it there adds no perceptible delay. This was the actual hard requirement: not "try to get a location," but "never let trying be the reason the button is slow." Structuring it as "start early, bound the wait to less than the delay that already exists" rather than "await, with a timeout, at send time" is what makes both true at once.
+
+**Family dashboard — `Open in Maps`, confirmed with you as an addition beyond "shows coordinates."** Active-alert cards with a location show the raw coordinates plus a `Linking.openURL` deep link to Google Maps. No map library, no in-app map view — one `Pressable`. Raw numbers on an emergency card are not very actionable without it. Not added to "Recent alerts" history cards — not asked for, and the API's `can_view_location` gating (above) is the part of this that needed to be consistent everywhere; the UI showing it everywhere is a separate, smaller decision that can wait to be asked for.
+
+### Verified
+
+Backend, against the running server and the real `eldercare` database: `POST /emergency/locations` writes a row and returns it; missing `longitude`, an out-of-range `latitude`, and an out-of-range `batteryLevel` each return `400 validation_failed` with the right field named; `POST /emergency/alerts` with a valid `{latitude, longitude}` stores them on the alert; `POST /emergency/alerts` with **no body at all** still returns `201` — confirming the "never a precondition" requirement actually holds server-side, not just in the client's intent. `family_links.can_view_location` flipped to `false` on the test link: the active list redacted `latitude`/`longitude` to `null` and returned `canViewLocation: false`; the alert was then resolved and the **history** endpoint showed the same redaction on the same row, confirming the gating survives an alert changing status. Flipped back to `true` and confirmed coordinates reappear. All test rows (two alerts, one location) deleted afterwards.
+
+Frontend: `npx expo export --platform android` bundled cleanly, 851 modules (up from 839 — the two new native packages), no unresolved imports.
+
+**Not verified on a device.** This is the same gap flagged on every step so far, but it matters more here: permission prompts, `Linking.openSettings()`, and actual GPS hardware are exactly the things a bundle check cannot prove. Phase 1 step 1 (the SOS button itself) *has* now been verified on a device per your note at the top of this task — this step has not yet had that pass.
+
+### Left open — for step 3
+
+**There is currently no way for an SOS to reach anyone who isn't already looking at the dashboard, and no escalation if nobody acknowledges it.** Everything built in steps 1 and 2 assumes a family member happens to have the app open and polling. Step 3 needs to close both gaps:
+
+- **Notification fanout in `emergency_contacts.priority` order** — SMS/call/push to the first contact, not a blast to everyone at once. The table already has `priority`, `notify_by_sms`, `notify_by_call`, `notify_by_push` per contact; none of it is read by any code yet.
+- **Escalation to the next contact if unacknowledged.** What "unacknowledged" means and how long to wait before escalating is not decided — that's step 3's design question, not answered here.
+- **Alerts must not auto-expire.** An unacknowledged alert stays `active` indefinitely; only a human action (`cancel` or `resolve`, both already built) closes it. Escalation adds more attempts to reach someone, not a timeout that silently closes the alert if no one responds — the two are easy to conflate and must not be.
+
+Not designed further here — flagged so it isn't lost, decided when step 3 actually starts.
+
+---
+
+## 2026-08-15 — `WORK_DIVISION.md`: step-level breakdown for every phase
+
+**Why:** the document had a numbered step list for Phase 0 only (section 6's progress table). Phases 1 through 6 existed only as feature bullets — a list of what each phase covers, not the discrete steps within it. Someone reading the document to understand the whole project end to end had no way to see, for instance, that Phase 1 is three separate steps rather than one undifferentiated "emergency core" block. A new section 8, "Step-by-step breakdown — every phase," adds that for all seven phases (0 through 6), one table per phase, each row a step and its owner.
+
+**Plan, not progress.** The new section deliberately carries no status column and no done/next/not-started language — that already exists, correctly, in section 6's "Progress so far," which this section does not touch or duplicate. Section 8 answers "what does this project involve," section 6 answers "how far along is it." Mixing them would have made the plan read differently depending on when it was last updated, which is exactly what a plan document should not do.
+
+**Phase 1's three steps match the terminology already used in this file** — step 1 (SOS button and alert record, including the family dashboard and its history, built and logged above), step 2 (GPS capture, also above), step 3 (notification fanout and escalation, logged as an open item above but not yet built). Reusing the same step numbers here rather than inventing a second numbering scheme is what makes "Phase 1 step 3" mean the same thing in both documents.
+
+**Two milestones placed where they fall, not collected in a separate list** — matching how you asked for them:
+
+- **DLT registration**, noted directly under Phase 1's table, where step 3 (SMS/call/push fanout) lives. Stated as a production-only dependency — development and testing of step 3 do not wait on it, only real SMS delivery to real Indian numbers does — so a reader doesn't mistake it for something blocking the step from being built at all.
+- **The development build**, noted at the top of Phase 3, before its own step 1. Phase 3's background location tracking is exactly the native-module requirement Expo Go can't satisfy — already flagged in this log's open issues more than once (2026-08-12 SDK-downgrade entry, Phase 1 step 2 entry above) — so this is the first place in the plan where that constraint actually blocks a step, and it's now written down as the phase's own first step rather than left as a general open issue with no fixed place to land.
+
+**One addition beyond what either PROJECT_REPORT.md or the existing WORK_DIVISION.md sections state explicitly:** Phase 6 now lists the location-retention purge as its own step, owned by Sree. `SCHEMA_DESIGN.md` and this file's own open issues have said "deferred to Phase 6" since Phase 0, but Phase 6 itself never had a line naming it as one of its steps until now — this closes that gap rather than leaving the commitment only implied.
+
+**Left unchanged:** sections 1 through 7, including the existing per-owner "Features from client requirements" tables in sections 2-4. Those answer "who owns what feature"; section 8 answers "what are the steps, in order" — different questions, both worth keeping.
+
+---
+
+## 2026-08-15 — Phase 1, step 3: emergency contact notification and escalation
+
+Scope: notification delivery and escalation. Steps 1 (SOS) and 2 (GPS) were already verified on a device before this started.
+
+### Channels — `backend/emergency/notifications/providers/{push,email,sms,voice}.js`
+
+Each provider is `isConfigured()` + `send()`, called over plain `fetch` — no `expo-server-sdk`, no `twilio` npm package. Each provider's API is one HTTP call with a JSON or form body; that's not enough surface to justify a dependency, same reasoning the project already applied to not having an HTTP client library on the frontend.
+
+- **Push (Expo)** — live with zero configuration. `DeviceNotRegistered` errors deactivate the stale `device_tokens` row so a dead token isn't retried on every future alert.
+- **Email (Resend)** — chosen after asking; free tier, and its sandbox sender (`onboarding@resend.dev`) works with no domain verification, which matters for a project at this stage. Live once `RESEND_API_KEY` is set.
+- **SMS and voice (Twilio)** — already named in `PROJECT_REPORT.md`'s stack, so this one wasn't a decision to make, just to wire. Live once `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` are set. Voice uses inline TwiML on the call-create request rather than a hosted TwiML endpoint — one POST is enough for a fixed spoken message.
+
+**An unconfigured channel still records the attempt, with the fix in the error message.** `isConfigured()` isn't a gate that silently skips the channel — a contact who opted into SMS still gets a `notifications` row with `status: 'failed'` and `error_message` naming exactly which `.env` variable is missing, and for SMS, the DLT note besides. That row is both the audit trail the product requirement asked for and the "how do I turn this on" documentation, in the same place, rather than two things that could drift apart.
+
+**Found while wiring this up: `emergency_contacts` has no `notify_by_email` column.** `notify_by_sms`, `notify_by_call`, `notify_by_push` all exist; email doesn't. Decision: attempt email whenever the contact has an address, unconditionally — there's no schema-level way to ask for anything else right now. Flagged rather than silently worked around, since it means a contact genuinely cannot opt out of email specifically while keeping the other channels on, and that's a real (if minor) gap someone should decide about deliberately later, not an oversight to rediscover.
+
+### Fanout and escalation — `backend/emergency/notifications/fanout.js`
+
+**One function, `advanceFanout`, does both the initial press and every later escalation.** Called fire-and-forget right after `POST /emergency/alerts` creates the row — never awaited, same "never a precondition" principle as GPS capture in step 2, just applied to slower and less reliable dependencies (SMS/email/push providers) than the device's own GPS. Called again by a scheduler once the wait interval passes with no acknowledgement. Both calls are the same code path: with no prior `notifications` row for the alert, "the next unattempted contact" is simply the first one — there was never a need for two different "who's next" implementations that could disagree.
+
+**Deliberately not a schema change.** "How far escalation has gotten" is derived from `notifications` joined to `emergency_contacts.priority`, not a new column on `alerts`. Since escalation only ever moves forward, the most recently created `notifications` row for an alert always belongs to its current-stage contact — no need to aggregate across every row for that contact, or store separate state anywhere. A contact with zero eligible channels (no device token, no email, both `notify_by_sms`/`notify_by_call` false) is skipped over within the same pass rather than getting a row of its own, which is what keeps this derivation correct — otherwise escalation could get stuck forever behind a contact that was never actually reachable.
+
+**Scheduler is a plain `setInterval`, not a cron dependency.** `backend/emergency/notifications/scheduler.js` sweeps every 60 seconds, asking the database which active, unacknowledged alerts are due (`ESCALATION_INTERVAL_MINUTES`, default 5, since when nothing configures the SOS button case), and advances each one. Started and stopped from `server.js`'s own lifecycle, alongside the database pool.
+
+**Known, accepted race, not engineered around.** The fire-and-forget call from `POST /emergency/alerts` and a scheduler sweep could in principle both call `advanceFanout` for the same brand-new alert within the same instant, both see no prior notifications, and both notify contact 1. Worst case is one redundant round of notifications to the same contact, not a missed one. A Postgres advisory lock would close this, but for how rarely the timing could actually collide, it wasn't judged worth the added complexity right now — written down here so it's a decision, not a gap nobody noticed.
+
+**A real bug this surfaced during verification:** the first `INSERT` into `notifications` used the same `$7` placeholder both as the `status` column value and inside a `CASE WHEN $7 = 'sent'` expression for `sent_at`. PostgreSQL couldn't settle on one type for that parameter (`notification_status` in one spot, implicit `text` in the other) and rejected every insert with "inconsistent types deduced for parameter $7" — silently, from fanout's point of view, since the failure was caught, logged, and swallowed by the same "never let a notification problem fail the alert" handling that makes this safe in production. Fixed by computing `sent_at` in JavaScript and passing it as its own parameter instead of asking SQL to branch on `$7` twice. Caught by checking the `notifications` table directly after triggering a real SOS, not by reading the code — the code looked correct.
+
+### Acknowledgement — `POST /emergency/alerts/:id/acknowledge`
+
+**Sets `acknowledged_at`/`acknowledged_by` (already existing, unused columns since Phase 0's schema) — does not change `status`.** Acknowledging and closing are different facts: acknowledging means "someone is on it, stop escalating"; only `cancel`/`resolve` actually end the alert. The alert stays `active` and keeps showing on the family dashboard exactly as before, just with an "Acknowledged by \<name\>" line added. Rejected: moving `status` to the existing-but-unused `'acknowledged'` enum value — that would have meant widening `cancel`/`resolve`'s `WHERE status = 'active'` guard to also accept `'acknowledged'`, for no actual benefit over a separate timestamp column that already existed for exactly this.
+
+**The alert's owner is excluded with no special-case code.** Permission is "a `family_links` row to the alert's owner with `can_acknowledge_alerts: true`" — the same check `resolve` already uses. `chk_not_self` in the schema means a `family_links` row from someone to themselves can never exist, so the owner always fails this check on their own alert without an explicit `if (alert.user_id === req.user.id)` branch anywhere.
+
+**A second acknowledgement gets `409 alert_already_acknowledged`, read as reassurance, not an error** — same pattern as `sos_already_active` from step 1. Someone else already being on it is good news for whoever just tapped the button second.
+
+### From the push notification itself, not only from inside the app
+
+The push sent for a new SOS carries an `sos-alert` notification category with an "Acknowledge" action button (`opensAppToForeground: false`), registered via `frontend/src/emergency/notifications/alertNotifications.js`. A response listener calls the acknowledge endpoint directly when that action fires, including via `getLastNotificationResponseAsync()` for the case where the app was launched cold by tapping it. **A plain tap on the notification — not the button — just opens the app and does nothing else.** Acknowledging is an explicit, first-person action; someone opening the app to look should not be silently recorded as "handling it."
+
+**Device token registration was missing entirely — `POST /emergency/device-tokens`, new.** `device_tokens` has existed since Phase 0's schema and was named as a Phase 1 deliverable in `WORK_DIVISION.md`, but nothing populated it until now: push had a table to read from and no way to ever put a row in it. Upserts on the token itself (already `UNIQUE`), not on `(user, device)` — a reinstall or an account switch on the same physical device correctly reassigns the row rather than creating a duplicate.
+
+**Frontend split across `shared/` and `emergency/`, same boundary as `captureLocation.js` from step 2.** `shared/notifications/{pushRegistration,notificationSetup}.js` know nothing about alerts — permission, getting a token, registering it, foreground display config. `emergency/notifications/{alertNotifications,NotificationsBridge}.js` own what an SOS push actually means and does, and compose the shared pieces with `useAuth()`. Push permission itself gets no custom plain-language rationale card the way location did in step 2 — a notification prompt is a much more familiar ask, and it wasn't part of what was requested here the way it explicitly was for GPS.
+
+**A real prerequisite surfaced, not worked around: Expo push tokens need an EAS `projectId`,** tied to an Expo account, which this project didn't have. Raised before writing any code rather than discovered by a runtime failure later. `registerForPushNotifications()` handles the missing case by logging a warning and returning `null` — nothing else in the app depends on it, so this blocks push specifically and nothing else until `eas init` (or a project created at expo.dev) provides a real id in `app.json`'s `extra.eas.projectId`. See the comments left there.
+
+### The cancel-vs-resolve open question — closed
+
+**Recommendation given, and accepted: `cancel` stays owner-only.** `can_acknowledge_alerts` does not extend to cancelling, only resolving, unchanged from step 1. The reasoning: `resolve` already covers a family-confirmed false alarm — `resolutionNotes` lets them write "confirmed false alarm by phone call," which is exactly the case the open question was about. Extending `cancel` to family would have cost something real: the alert-history feature from step 1 already shows "cancelled by them" versus "resolved by family" as two different, meaningful facts on the family dashboard. Letting family cancel too would have made "cancelled" stop reliably meaning "the person who pressed it says it was a mistake" — the one distinction that made `cancel` worth having as separate from `resolve` in the first place. No code changed as a result; this closes the question raised in the 2026-08-15 SOS entry (see "Open issues" above) without changing anything `routes.js` already does.
+
+### Verified
+
+Backend, against the running server and the real `eldercare` database, with `backend/scripts/seed-test-users.js` extended to seed two `emergency_contacts` for the test elderly account — one that's also the test family account (so fanout has a real `contact_user_id` to find a device token for), one that isn't (so escalating past contact 1 is actually testable):
+
+- An SOS fired, and after the `$7` bug above was fixed, the scheduler's next sweep self-healed the alert that had failed to fan out on creation — contact 1 notified by SMS and voice call, each recorded `failed` with the exact "set these `.env` variables" message, no push attempt (no device token existed yet) and no email attempt (that contact has no email in the seed data).
+- A second SOS, after registering a (fake) push token for the test family account via `POST /emergency/device-tokens`: push was attempted for real against Expo's live API, which correctly rejected the fabricated token and that rejection was recorded — confirming the whole dispatch-and-record pipeline end to end, not just the provider modules in isolation.
+- Acknowledging: the elderly owner gets `403 not_permitted` on their own alert; an unrelated account (admin, no family link) also gets `403`; the permitted family member gets `200`; acknowledging again gets `409 alert_already_acknowledged` with the current alert attached.
+- Escalation actually stopping: acknowledged an alert right after contact 1 was notified, then waited a full scheduler sweep (70+ seconds) and confirmed no notification row for contact 2 was ever created — not inferred from reading the code, checked against the database after the wait.
+- `GET /emergency/family/alerts` correctly reflects `acknowledgedAt`/`acknowledgedByName` before and after acknowledging.
+- `POST /emergency/device-tokens`: valid registration returns `201`; an invalid `platform` and a missing `expoPushToken` each return `400 validation_failed` naming the right field.
+- All test rows created during this (two alerts, their cascaded `notifications` rows, one device token) deleted afterwards. The two seeded `emergency_contacts` and the family link were left in place, same as `family_links` after step 1 — reusable fixtures, not one-off test data.
+
+Frontend: `npx expo export --platform android` bundled cleanly, 992 modules (up from 851 — `expo-notifications` and `expo-device`), no unresolved imports.
+
+**Not verified on a device.** Everything above is backend verification plus a bundle check. The push permission prompt, the actual "Acknowledge" action button rendering on a lock screen, and a real device token making a real push notification arrive have not been exercised on a phone — and per this task's framing, that matters more here than on most steps, since a notification path is exactly the kind of thing that can look right in code and still not work on real hardware.
+
+---
+
+## 2026-08-16 — EAS projectId, and Phase 1 verified end to end on real devices
+
+**The blocker from the step-3 entry above is closed.** `registerForPushNotifications()` had been logging a warning and returning `null` because no EAS `projectId` existed. Logged into a new free Expo account (`@sree25`) via `npx eas-cli login`, then `npx eas-cli init` from `frontend/` created and linked the project (`@sree25/eldercare`, id `c89864ad-512c-4674-9258-236cb3b560f9`), writing `extra.eas.projectId` into `app.json` automatically — no hand-editing. `eas init` also added `owner: "sree25"` and two Android location permissions to `app.json` as a side effect of the `expo-location` plugin; neither was asked for but both are correct and harmless.
+
+**Phase 1 is now complete and verified on real devices — all three steps.** Every "not verified on a device" caveat carried by the step-1, step-2, and step-3 entries above is closed:
+
+- SOS button: countdown, confirm-to-cancel, and polling all exercised by actually pressing the button on a phone.
+- GPS: permission prompt, plain-language rationale card, and location capture all confirmed working on-device, not just bundled.
+- Notifications: push delivered end to end through the new EAS project, including the "Acknowledge" action button rendering and working from the lock screen, both as a direct tap and via `getLastNotificationResponseAsync()` on a cold app launch. SMS and voice call attempts against Twilio (not yet configured) and DLT (not yet registered, per the Phase 1 milestone note in `WORK_DIVISION.md` section 8) are correctly recorded in `notifications` as `failed` with the exact missing-configuration reason, rather than silently dropped — the audit trail behaves the same on a real device as it did in the step-3 backend verification.
+
+**`WORK_DIVISION.md` section 6 updated to match** — a new "Emergency core (Phase 1) — complete, verified on real devices" block and a Phase 1 steps table (all three **Done**, owner Sree), in the same style as the existing Phase 0 tables. Section 8's step-by-step breakdown was already correct and needed no change — it describes the plan, not progress, per its own stated split from section 6.
+
+---
+
+## 2026-08-16 — Phase 3, step 1: development build configured (not yet run)
+
+Scope, deliberately narrow: get the project ready to leave Expo Go for a custom dev client on Android, and install the native modules Phase 3 needs. No geofencing, no background-tracking code — those are steps 2 and 3. This entry covers configuration only; the actual `eas build` and on-device install are the next action, not yet taken.
+
+### Why this step has to come first
+
+Flagged repeatedly since the 2026-08-12 SDK-downgrade entry: Expo Go only runs the JS/managed-API surface Expo ships in the store build. Background location — reading position while the app is not in the foreground, which both step 2 and geofencing in step 3 depend on — needs a native `expo-task-manager` background task registered in the compiled app, which Expo Go cannot do at all. There is no way to build any of the rest of Phase 3 without a custom dev client first.
+
+### New dependencies — `expo-dev-client`, `expo-task-manager`
+
+Both added via `npx expo install` so they land at the versions SDK 54 expects, same discipline as every native module added so far (`expo-location`, `expo-battery`, `expo-notifications`, `expo-device`).
+
+- **`expo-dev-client`** replaces the Expo Go app itself — it's what turns a normal build into one that can load this project's JS bundle from Metro over Wi-Fi the same way Expo Go does today, except now carrying whatever native modules the project actually has installed. No app code depends on it directly; installing it is what changes `expo build`'s output.
+- **`expo-task-manager`** is the one native module actually needed for this step. It isn't used by any feature yet — no background task is registered anywhere in this commit — but both background location (step 2) and geofencing (step 3, `Location.startGeofencingAsync`) are built on it under the hood, so it has to be present in the compiled binary before either can be written. Installing it now, ahead of the code that uses it, is the one deliberate exception to this project's usual "don't build ahead of being asked" rule: unlike a JS dependency, a missing native module can't be added without a new build, so step 2 would otherwise mean stopping mid-step to rebuild.
+
+**No separate geofencing library.** `expo-location`'s own geofencing API (`Location.startGeofencingAsync`) is what step 3 will use — it's already installed from Phase 1 step 2, and it's built on the same `expo-task-manager` foundation as background location rather than a second one. Nothing more to add for that later step than what's already here.
+
+### `app.json` — background location permission, package name
+
+- **`android.package` set to `com.sree25.eldercare`.** EAS Build requires one — there was none before because Expo Go doesn't need an application id, it runs everyone's JS inside its own. Chosen to match the Expo account (`sree25`) this project is already under. **This is a decision you should confirm, not one to treat as final by default:** it's cheap to change now, on a dev/internal build nobody has installed from a store, but effectively permanent the moment a `production` build is submitted to the Play Store — Google ties the listing to this string for the life of the app.
+
+- **`expo-location` plugin config gains `isAndroidBackgroundLocationEnabled: true` and `isAndroidForegroundServiceEnabled: true`.** Verified with `npx expo config --type public` that the resolved manifest permissions now include `ACCESS_BACKGROUND_LOCATION`, `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_LOCATION` alongside the two foreground permissions already there since Phase 1 step 2 — read from `expo-location`'s own plugin source (`node_modules/expo-location/plugin/build/withLocation.js`) rather than assumed, since Android's background-location manifest requirements are exactly the kind of thing worth checking rather than guessing. `isAndroidForegroundServiceEnabled` matters specifically because Android 14 (API 34) rejects a location-type foreground service that doesn't declare `FOREGROUND_SERVICE_LOCATION` — without it, step 2's background tracking would work in testing on an older phone and fail silently on a newer one.
+
+- **Not added: any iOS background-location config.** `isIosBackgroundLocationEnabled` and the `locationAlways...` permission strings are left unset — this step is scoped to Android per your instruction, and setting iOS values now would be building ahead of a platform this step isn't touching.
+
+- **No manual `android.permissions` edit.** The plugin adds the three new permissions to the manifest itself during prebuild; hand-adding them to the `permissions` array as well would just be the same fact stated twice, with the two copies free to drift.
+
+### `eas.json` — new file
+
+Three build profiles, the standard EAS shape:
+
+- **`development`** — `developmentClient: true`, `distribution: "internal"`, Android `buildType: "apk"`. This is the one this step's `eas build` will actually use: an APK (installable directly, no Play Store) carrying the dev client, so Metro can push JS to it the way Expo Go did.
+- **`preview`** — same internal/APK shape, no dev client. Not needed yet; included because a "give this to someone to test without Metro running" build is the obvious next thing once a feature is ready, and it costs nothing to have the profile ready.
+- **`production`** — Android `buildType: "app-bundle"`, the format the Play Store actually wants. Also not needed yet — there's no store listing — but `app-bundle` vs `apk` is the kind of setting worth getting right once rather than debugging later.
+
+### Verified
+
+`npx expo config --type public` resolves cleanly: `android.package` present, all five Android location/foreground-service permissions present, `expo-task-manager` and `expo-dev-client` both listed as installed dependencies with SDK-54-matched versions, `owner`/`extra.eas.projectId` unchanged from the existing `@sree25/eldercare` project. `npx expo export --platform android` bundles cleanly at 992 modules — unchanged from step 3's count, because neither new package is imported by any code yet; installing a native module without using it from JS doesn't move the bundle.
+
+**Not run yet: `eas build --profile development --platform android`.** That's the actual cloud build and the on-device install — the next action, done once you've confirmed the account and package-name decisions above, not something to run silently in the same pass as a config change.
+
+**Follow-up, same day: `android.package` changed to `com.eldercare.app`, your call, before the first build.** The initial `com.sree25.eldercare` tied the app id to a personal Expo account name; `com.eldercare.app` doesn't, which matters more once this has a real Play Store listing than it does today. Reconfirmed with `npx expo config --type public` that the resolved manifest picks up the new value. Nothing else in this step changes as a result — `owner`/`extra.eas.projectId` stay on the existing `@sree25/eldercare` EAS project regardless of the Android application id, since the two are unrelated (one identifies the Expo project builds are submitted through, the other is what the installed app is called on the device/store).
+
+### Left open — for steps 2 and 3
+
+Once the dev build is installed: background location tracking (a `TaskManager`-registered task, `Location.startLocationUpdatesAsync`, and the plain-language rationale + Android's own "Allow all the time" settings flow, since Android 11+ won't grant background location from the same prompt as foreground) is step 2. Geofencing (`Location.startGeofencingAsync`, safe zones per elderly user, breach detection) is step 3. Neither is touched here — this step is the build capability only.
+
+---
+
+## 2026-08-16 — Phase 3, step 2: background location tracking
+
+Scope, per your instruction: capture and storage only. No geofencing, no map UI — those are steps 3 and 4. Reuses `POST /emergency/locations` from Phase 1 step 2 unchanged; no backend or schema change.
+
+### Checked before building: do steps 3 and 4 need further native modules?
+
+Per your instruction, checked ahead so this is one rebuild instead of two.
+
+- **Step 3 (geofencing) needs nothing new.** `Location.startGeofencingAsync` is part of `expo-location`, already installed since Phase 1 step 2, and runs on the same `expo-task-manager` foundation this step already needs. Nothing more to add.
+- **Step 4/5 (map UI) will need a map renderer — `react-native-maps` is the standard choice — but that wasn't installed here.** Unlike `expo-task-manager`/`expo-file-system`, it isn't self-contained: Android needs a real Google Maps API key (a Google Cloud project, Maps SDK enabled, likely billing) before it renders anything, which is an account decision, not a code one. Installing a native module now that sits inert until that key exists seemed worse than one more rebuild later, so it's deliberately deferred rather than added speculatively. Flagged here so it's a decision, not an oversight, for whoever starts step 4/5.
+
+### The headless-context problem this step is actually built around
+
+Android can wake this app to deliver a location update while it's fully closed — not backgrounded, closed. When it does, the JS bundle runs **headless**: no React tree mounts, no `App()` renders, no `AuthProvider` `useEffect` ever fires. That single fact shaped almost every decision below, because it means the existing `shared/api/client.js` — whose Bearer-token wiring (`configureApiClient`) is set up *inside* `AuthProvider`'s mount effect — is simply not available to code that has to run in that context.
+
+- **`TaskManager.defineTask` lives in its own file (`backgroundLocationTask.js`) imported at the top of `App.js`, not from inside a screen component.** Module-level code runs on every bundle load, headless or not, as a plain consequence of how JS module evaluation works — that's what makes it safe to rely on here, and it's the one thing that has to be true or the OS ends up with a native task registered with no JS handler to deliver to.
+- **A separate, self-contained request path (`backgroundLocationApi.js`) instead of reusing `apiRequest`.** It reads tokens straight from `tokenStore` (SecureStore — safe to call outside React, unlike `AuthContext`'s in-memory ref) and repeats `client.js`'s refresh-on-401 dance in miniature: on `401 token_expired`, calls `/auth/refresh` directly, saves the renewed pair, retries once. On an unrecoverable refresh failure (invalid/reused/expired/revoked — the same codes `API.md` documents under `/auth/refresh`), it clears the stored tokens and **stops the tracking task itself** — there's no legitimate way to keep reporting location without a session, and leaving the foreground-service notification running for a dead session would be actively misleading.
+
+### Update interval and distance filter — the tradeoff, as approved
+
+**90-second time floor, 75-metre distance filter, `Accuracy.Balanced`.** Balanced (not High/BestForNavigation) lets Android blend cell/Wi-Fi positioning and duty-cycle the GPS chip instead of holding a continuous lock — ~100m accuracy is enough for "roughly where," and it's the same accuracy SOS-time capture already uses (`captureLocation.js`, Phase 1 step 2) for the same reason. The distance filter matters more than the timer for battery: a stationary phone (most of an elderly user's day, typically) barely gets sampled at all, since nothing has moved 75m; the time floor exists only so a slow walker still gets *a* reading rather than waiting on distance alone. Worst-case staleness is ~90 seconds while someone's moving continuously — accepted, because this is a passive reassurance feature ("roughly where are they"), not a live tracker.
+
+### Volume check against `SCHEMA_DESIGN.md` §2.7 — confirmed, footnote added
+
+§2.7's worst case ("one reading per 30 seconds") is ~2,880 rows/user/day, and the 30-day retention window was sized against that number as a forward-looking estimate — before this step, nothing produced continuous volume; Phase 1's captures were one-shot and negligible. At 90s/75m, worst case (continuously moving) is ~960 rows/user/day; typical (mostly stationary) is far fewer. **Both stay comfortably inside the documented envelope — no schema or retention change needed.** Added one paragraph to §2.7 recording this as the first real confirmation of that estimate, not just the original forward-looking number.
+
+### Offline queue — `shared/location/locationQueue.js`, new dependency `expo-file-system`
+
+A JSON file, not SecureStore: SecureStore's encrypted-storage backing on Android has a practical per-value size limit a growing array of readings would eventually hit, and nothing queued here is a credential — it's the same coordinates already sent in plaintext once delivered, so encryption buys nothing that would justify that limit. Installed via `npx expo install`, matched to SDK 54 (`19.0.23`).
+
+**Used via `expo-file-system/legacy`, not the new synchronous/JSI `File`/`Directory` API this same package version also ships.** The new API is real and simpler in places, but a headless background context — hard to attach a debugger to, hard to reproduce a failure from — is exactly the wrong place to be the first code in this project to hit a rough edge in a newer API. The legacy `writeAsStringAsync`/`readAsStringAsync`/`getInfoAsync` functions are the well-worn, promise-based ones already stylistically consistent with the rest of this codebase.
+
+**Every task delivery appends to the queue, then attempts to flush the whole thing, oldest-first, stopping at the first send that can't complete.** No dedicated connectivity listener (no `NetInfo` dependency added): the next scheduled task tick already retries automatically once the phone's back online, which bounds the worst-case delay to one interval (90s) — judged not worth a native dependency just to shave that down to "instantly."
+
+**Capped at 2,000 entries (~2 days at worst-case cadence); oldest dropped first past the cap, and — per your instruction — the drop itself is recorded, not silent.** Each eviction appends `{ count, at }` to a bounded drop log (`getDropHistory()`, capped at the 50 most recent) written to the same queue file, plus a `console.warn` at the moment it happens. A month-old queued reading has essentially no safety value by the time it would ever be sent, but a silent gap in the location trail with nothing pointing at why would have been a real regression against the spirit of "don't lose readings" — this is the compromise: still bounded, but the loss is now a fact the app (or a future diagnostics screen) can actually surface, not a mystery.
+
+**A permanently-rejected reading (any 4xx other than an expired token) is also dropped from the queue, logged separately, not counted in the capacity drop log.** Shouldn't happen — the task builds every field itself — but a single malformed reading must not block everything queued behind it forever if it ever does.
+
+### Permission flow — `shared/location/backgroundTracking.js`
+
+Foreground first (already built, Phase 1 step 2, reused as-is), then a second card asking for background, only shown once foreground is granted. Android's own behaviour splits in two by OS version, and the card has to answer both:
+
+- **Android 10:** `requestBackgroundPermissionsAsync()`'s OS dialog offers "Allow all the time" directly.
+- **Android 11+:** the OS dialog won't offer that option at all — Google's anti-abuse restriction — so it can only be turned on from system Settings. The card detects this (the request call comes back still not granted) and switches to an "Open settings" link, same `Linking.openSettings()` pattern the existing foreground-denied case already uses.
+
+**Coming back from Settings is handled automatically, not left for the user to notice and retry.** `ElderlyHomeScreen` re-checks on every `useFocusEffect`, and if it was showing the "background_denied" explanation, it silently retries `enableBackgroundTracking()` on refocus — if permission is now granted, tracking just starts; if not, the same explanation stays up. (Caught one bug writing this: the retry check originally read `trackingPhase` directly inside a `useCallback` memoized with an empty dependency array, which would have frozen it at its initial value forever — the effect would never have noticed the phase actually changed. Fixed by reading a ref kept in sync via its own effect, the same pattern `sosLocationRef` above it already uses for the same reason.)
+
+### On/off — a new, separate card on `ElderlyHomeScreen`, as approved
+
+"Continuous location tracking," deliberately not merged into the existing "Location sharing" card: one is a single foreground capture tied to this session, the other an ongoing background service with its own two-step permission flow — conflating the copy for both risked the elderly user not understanding what either one actually does. States: off → enabling → on (shows a "Turn off" button; the persistent Android foreground-service notification is the other place this is visible, and arguably the more important one — it's there even if the app is never reopened) → the two denied-permission explanations above.
+
+**Reconciled against OS reality on every mount/focus, not just trusted from the stored preference.** If the OS silently killed the task (permission revoked in system settings later, battery optimisation, etc.) but the stored preference still says "on," the preference is corrected to match what's actually running rather than the screen claiming tracking is on when it isn't — the same "don't lie about state" instinct as this screen's active-alert check already failing open instead of guessing.
+
+**Turning tracking off stops new captures; it does not discard whatever's already queued.** Those readings were legitimately captured while it was on — losing them on top of the phone having been offline would be worse than sending them slightly late.
+
+**Signing out stops tracking — `AuthContext.js`, both `signOut()` and `onSessionEnded`.** A logged-out phone must not keep running a foreground service and showing a notification for a session that no longer exists; `onSessionEnded` covers the case where the server ends the session out from under an otherwise-still-open app (e.g. refresh-token reuse detected — see Phase 0's auth entry), not only the deliberate sign-out button.
+
+### New files (frontend only)
+
+`shared/location/backgroundLocationTaskName.js` (the shared task-name constant, its own file specifically to avoid a circular import between the task definition and the start/stop control module), `backgroundLocationTask.js`, `backgroundLocationApi.js`, `backgroundTracking.js`, `locationQueue.js`. Edits: `ElderlyHomeScreen.js` (new card), `AuthContext.js` (stop tracking on sign-out/session-end), `App.js` (top-level task import).
+
+### Verified
+
+`npx expo config --type prebuild` confirms `expo-file-system`'s config plugin auto-applies during the real build (adds `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE`, `INTERNET`) with no `app.json` edit needed — checked rather than assumed, same discipline as reading `expo-location`'s plugin source in the step-1 entry above. `npx expo export --platform android` bundles cleanly at 1,005 modules (up from 992 — `expo-file-system` and its transitive deps), no unresolved imports, no circular-import failures despite five new files with real dependencies between them.
+
+**Not yet verified on a device — the dev build this step needs is being kicked off now; see the follow-up entry once it completes.** Permission prompts (both steps), the foreground-service notification actually appearing, a real background delivery while the app is closed, and the offline-queue-and-flush path are exactly the things a bundle check cannot prove.
+
+---
+
+## 2026-08-16 — Follow-up: the dev build for step 2 completed
+
+`eas build --profile development --platform android --non-interactive`, run right after the step-2 commit above. Build `ddfca5cf-e2b2-4926-9f3b-fcdac4636f54`, `development`/`internal`/Android, SDK 54.0.0. Started 21:26:01, finished 21:31:59 — about 6 minutes, no queue wait at the time. Managed credentials: EAS's existing remote Android keystore was reused (`Build Credentials xvQ8M3_gWV`), nothing new to configure. Install link: `https://expo.dev/accounts/sree25/projects/eldercare/builds/ddfca5cf-e2b2-4926-9f3b-fcdac4636f54`.
+
+**One thing worth recording rather than quietly trusting: `eas build:view` reports this build's `Commit` as `67242b3` (the package-name-change commit) instead of `d5a2894` (this step's own commit, HEAD at the moment the build was triggered).** Checked `git log`/`git rev-parse HEAD` immediately after and confirmed `d5a2894` was genuinely HEAD by then — so this looks like a display-metadata timing quirk in `eas-cli`, not evidence that stale code was actually archived and uploaded. Two reasons this is very unlikely to matter in practice, recorded here rather than just asserted:
+
+- **This is a development-client build.** Unlike a production build, the APK doesn't bundle the app's JS at all — a dev client fetches it live from Metro (`npx expo start --dev-client`) every time it connects. Whatever commit the "Commit" field names, the JS actually running on the device will be whatever `npx expo start --dev-client` serves at the moment you connect, i.e. always current.
+- **What *is* baked in natively — permissions, `expo-file-system`/`expo-task-manager`'s native code — comes from `app.json` and `node_modules` as they stood on disk at upload time**, not from git metadata. Both were already correct on disk by the time the build command ran, since `npm install` and the `app.json` edits happened, and were committed, before this build was triggered.
+
+Flagged rather than silently ignored: if anything native (a missing permission, a native module not behaving) looks wrong on-device, this is the first thing to double-check — re-run the build and confirm the `Commit` field matches HEAD that time.
+
+### Not verified by me — needs the phone
+
+Install the APK from the link above, run `npx expo start --dev-client` from `frontend/`, and connect. Specifically worth checking, since none of it can be proven from a bundle export: the two-step permission prompts (foreground, then background — including the Android-version-dependent "Allow all the time" behaviour), the foreground-service notification actually appearing and persisting, a real background location delivery while the app is fully closed (not just backgrounded), the on/off card's states, and that a location taken while offline shows up once connectivity returns.
+
+---
+
+## 2026-08-17 — Location duplicate fix: `source` populated, DB-level dedup guard, preview build
+
+Found while reviewing early background-tracking data from the step-2 dev build above: 22 rows in `locations` for the one test account that had been running it, 4 exact-duplicate pairs (8 rows) sharing identical coordinates/accuracy/battery but two different `created_at` timestamps, 7 seconds to 4 minutes apart — never simultaneous. That gap rules out a same-batch double-delivery (which would produce near-identical `created_at`s) and points at `backgroundLocationApi.js`'s queue-then-retry mechanism instead: a "failed" send stays queued and gets resent whenever the next task delivery happens to land, which is irregular by nature. `source` had existed as a column since Phase 0's schema but nothing had ever written it — every row read back `'gps'`, the column's own default — which is also why this couldn't be diagnosed from the data alone until now.
+
+### `source` populated — `backend/emergency/{validate.js,locations.js,routes.js}`, both location-writing screens
+
+`LOCATION_SOURCES = ['foreground_mount', 'background_task', 'sos_capture']` in `validate.js`, validated the same way every other enum-shaped field in that file is — reject with the field named if present and not one of the three, pass through untouched if omitted, so existing rows and any caller that doesn't send it keep working (`COALESCE`d to the column's own `'gps'` default in the insert). `ElderlyHomeScreen.js`'s mount-time capture now sends `foreground_mount`; `backgroundLocationTask.js`'s task delivery now sends `background_task`.
+
+**`sos_capture` is reserved, not wired to a write.** Checked before assuming it needed one: the SOS-press capture (`captureCurrentLocation` in the countdown) is sent inline with `POST /emergency/alerts` and lands on `alerts.latitude`/`longitude` directly — `alerts.js` says this is deliberate, so it survives the 30-day `locations` purge. It has never touched the `locations` table and still doesn't; giving it a `source` value here would mean a new write path, not just a tag on an existing one, which is a bigger change than "populate the column." Left in the list so validation is ready the moment that changes, flagged rather than silently added.
+
+### Database-level duplicate guard — `locations_user_recorded_at_key`, `ON CONFLICT DO NOTHING`
+
+`UNIQUE (user_id, recorded_at)` added to the `locations` table (inline in `schema.sql`, matching every other table's constraint style, not a bolted-on `ALTER TABLE`). `createLocation` now does `INSERT ... ON CONFLICT (user_id, recorded_at) DO NOTHING RETURNING *`, returning `undefined` when a duplicate was silently absorbed; `routes.js` treats that as success — `200 { location: null, deduplicated: true }`, not an error. Checked rather than assumed whether the two client queues needed a change to cope with that: neither `backgroundLocationApi.js`'s `sendReading` nor the foreground `apiRequest` in `client.js` inspects the response body, only the HTTP status — any 2xx already drains the queue item, so no frontend change was needed for this half.
+
+**Why `(user_id, recorded_at)` and not something else.** `recorded_at` is the GPS timestamp the device itself stamped on the reading, not `created_at` (when the row landed in the database) — two rows for the same physical fix always share the same `recorded_at` even when they arrive minutes apart, which is exactly what the queued-retry pattern above produces. Two genuinely different readings from the same user at the same recorded instant is not a case this product needs to support.
+
+**Cleanup before the constraint — `backend/scripts/dedupe-locations.js`, new, same dry-run-by-default convention as `normalize-phones.js`.** Within each `(user_id, recorded_at)` group, keeps the row with the earliest `created_at` (the first successful write), reports the rest for deletion. Dry run matched the 4 pairs identified above exactly. Run against the development database: `--apply` deleted 4 rows (`06d91b9a…`, `7eaee807…`, `4ea2e1e1…`, `ea4547af…`), then the constraint was added and confirmed present via `pg_constraint`. One write verified directly against `createLocation` afterwards — a row with `source: 'foreground_mount'` inserted correctly, and resending the identical `(user_id, recorded_at)` returned `undefined` as designed; the test row was deleted afterward.
+
+### Foreground-mount frequency — analysis only, no code change
+
+Checked how often `ElderlyHomeScreen`'s mount-time capture effect (empty dependency array — fires once per mount, not once per app-open) can actually fire in production, since today's 7–10 second gaps looked too frequent to be real usage. `AppNavigator` gives the elderly role exactly one screen, so in-app navigation never remounts it, and `AuthContext` has no `AppState` listener, so backgrounding/resuming without the OS killing the process doesn't remount it either — only a genuine cold start or sign-out/sign-in does. The rapid gaps in today's data are much better explained by Metro's Fast Refresh doing a full JS reload on nearly every save while testing a dev client, which won't exist once this runs as a preview build with no Metro attached. **Decision: hold off on a rate-limiting guard until real preview-build data (with `source` now populated) shows whether cold-start frequency is actually a problem** — adding one now would be guarding against a volume this test data doesn't represent.
+
+### Preview build
+
+`eas build --profile preview --platform android --non-interactive` from `frontend/`. Build `63d6c3c9-764c-439f-8c9f-5fd788c9b1f0`, `preview`/`internal`/Android APK, SDK 54.0.0. Started 04:17:49 UTC, finished 04:27:47 UTC — about 10 minutes, ~7s combined queue/wait time. Same reused remote Android credentials as the earlier dev build (`Build Credentials xvQ8M3_gWV`). Artifact: `https://expo.dev/artifacts/eas/nnXYwyMhuVFO_t_Q8zQY1htoEKYeSnQvdEYEEhqVkyE.apk`.
+
+**Unlike the step-2 dev-client build above, this one's `Commit`-metadata question doesn't carry the same caveat.** A `preview` build has no dev client and bundles its own JS rather than fetching it live from Metro, so what's actually inside the APK is whatever `eas build` archived and uploaded from the local working tree at upload time — not git HEAD, and not whatever the `eas-cli`/dashboard `Commit` field happens to display. The code changes above were on disk, uncommitted, when this build was triggered; this entry and the commit that includes it land together, same as every other code change in this file.
+
+**The local `eas build` CLI process was killed partway through waiting** (a background-task limit, not something done deliberately) while the remote build was still `IN_PROGRESS`. Confirmed via `eas build:view --json` that killing the local polling process has no effect on the remote build — EAS builds run server-side independent of the CLI that queued them — and polled that endpoint directly until it reported `FINISHED`, rather than trusting the (correctly) silent local log.
+
+### Not verified
+
+**Not run on a device.** The preview APK bundles its own JS, so nothing above has been confirmed to actually run correctly outside of the backend-level `createLocation` check described above — the `source` tagging, the dedup guard under real duplicate traffic, and the frequency analysis's "cold start only" claim all still need someone to install the APK and use it.
+
+---
+
+## 2026-08-26 — SOS location reliability: 44% NULL rate, async attach + last-known floor
+
+**Live data, not assumption.** Queried the running dev database directly rather than reasoning from code alone: of 27 SOS alerts, 12 (44.4%) had NULL `latitude`/`longitude`. Bursty by session, not time-of-day — some sessions were 0% NULL, others 100%, consistent with rapid repeat presses rather than a diurnal pattern.
+
+**Walked `captureCurrentLocation` (`captureLocation.js`) against that data.** `SOS_LOCATION_TIMEOUT_MS = 4500` races `Location.getCurrentPositionAsync({ accuracy: Balanced })` against a bare `setTimeout`; whichever settles first wins, and the loser was previously discarded outright — no last-known fallback existed anywhere in the app (`getLastKnownPositionAsync` was never called). A miss at 4.5s meant a permanently NULL alert, even though the same fix often would have landed a few seconds later. Confirmed the send itself is never delayed: the countdown is 5s, longer than the 4.5s race, so `fireSos` always finds it already settled.
+
+**A second live finding, chased before touching any code: `locations.accuracy_meters = 100.00` on 19 rows, exact to two decimals.** Initially suspected an emulator default; the user corrected this — all testing has been on a real Samsung device, no emulator in this project. Re-checked every write path (`captureLocation.js`, `backgroundLocationTask.js`, `backend/emergency/{validate.js,locations.js}`, `scripts/seed-test-users.js`) for a hardcoded `100` — none exists; every path passes `position.coords.accuracy`/client-supplied `accuracyMeters` straight through, defaulting to `null` on absence, never to `100`. `seed-test-users.js` doesn't touch `locations` at all. Conclusion: the flat `100.00` is Android's own `coords.accuracy` report for `PRIORITY_BALANCED_POWER_ACCURACY` (network/fused-provider) fixes — a real device value, not app-code or seed-data injected, but still a bucketed ceiling rather than a genuine per-fix measurement. Not a bug; no code change from this half of the finding. A separate cluster (`315.95`, three rows, identical coordinates and accuracy across captures 43–83s apart) does look like a cached fix reissued rather than three fresh readings — consistent with the fix below.
+
+### Schema — `backend/shared/db/schema.sql`, `alerts` table
+
+Three columns added inline (matching the project's existing convention — schema changes live in `schema.sql`, not a bolted-on migration file; see the 2026-08-17 entry above for the same reasoning applied to `locations`):
+
+```sql
+location_accuracy_meters  NUMERIC(6,2),
+location_is_approximate   BOOLEAN     NOT NULL DEFAULT FALSE,
+location_captured_at      TIMESTAMPTZ,
+```
+
+Applied against the running dev database as an additive `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, non-blocking, no backfill — existing rows correctly read `FALSE`/`NULL` (no historical alert claimed to be approximate). `location_captured_at` is distinct from `triggered_at` on purpose: a last-known or async-attached fix can predate or postdate alert creation by a meaningful amount, and the family dashboard's badge wording depends on knowing which.
+
+### Backend — `validate.js`, `alerts.js`, `routes.js`
+
+`validateSosAlertBody` accepts optional `accuracyMeters`/`isApproximate`/`capturedAt` alongside the existing coordinates. New `validateAttachLocationBody` for the PATCH body — coordinates required, no `isApproximate` field (the server hardcodes it `false` on that write path; async-attach only ever carries a fresh fix). `createSosAlert` writes all three new columns; new `attachAlertLocation(id, location)` does the PATCH-time `UPDATE`, deliberately with **no `status = 'active'` guard** in the `WHERE` clause — unlike `cancelAlert`/`resolveAlert`, a late fix is accepted on a cancelled or resolved alert too, so the record isn't stuck on "no location" just because the timing lost a race. `toPublicAlert`/`withLocationGate` expose and redact the three new fields the same way as `latitude`/`longitude` — together, under the same `can_view_location` gate.
+
+New route: `PATCH /emergency/alerts/:id/location`, owner-only (`alert.user_id !== req.user.id` → 403), any status, documented in `API.md` alongside the rest of the alerts endpoints.
+
+### Frontend capture — `captureLocation.js`, `ElderlyHomeScreen.js`
+
+`captureCurrentLocation`'s internal `Promise.race` previously discarded the losing `getCurrentPositionAsync` call once the timeout won — restructured so the underlying read (`readPosition`, extracted, no timeout of its own) can be held onto past that point. New `beginSosLocationCapture({ timeoutMs })` returns both `settled` (the existing race, used for the send-time value) and `full` (the same read, unbounded) so a caller can keep watching after the send deadline without a second radio request. New `captureLastKnownLocation()` wraps `getLastKnownPositionAsync` — no radio use, near-instant, always shaped `isApproximate: true`.
+
+`ElderlyHomeScreen.js`: `SOS_LOCATION_TIMEOUT_MS` unchanged at 4500 — the send gate is untouched, per the explicit constraint that GPS must never delay an SOS. New `SOS_LOCATION_ASYNC_CEILING_MS = 25_000`, how long the async-attach path keeps watching for a late fix, measured from countdown start (SOS press), same reference point as the send timeout. `fireSos`: if the 4.5s race comes back null, falls back to `captureLastKnownLocation()` as the initial send value (marked `isApproximate: true`); either way, if no *fresh* fix had already landed by send time, fires `attachLateSosLocation(alertId)` without awaiting it — watches the ceiling-bounded `full` read, and `PATCH`es the alert if one lands. Runs regardless of whether the person has since cancelled the alert locally, matching the backend's no-status-guard behavior. Known residual gap, stated rather than papered over: if the app backgrounds or is killed right after send, this promise has no guarantee of ever resolving — an improvement to the miss rate, not a full close of it.
+
+### Family dashboard — `FamilyHomeScreen.js`, `theme.js`
+
+New `colors.warning`/`colors.warningBg` (amber), kept separate from `danger`/`success` — an approximate-location signal is a different fact from the alert's own severity or a confirmed reading, and reusing either color would blur them. `AlertCard` renders a fixed amber badge (not a tooltip) next to the coordinates whenever `locationIsApproximate` is true, wording keyed on staleness rather than a bare "approximate": `"Approximate — from N minutes before the alert"` under 30 minutes, escalating past that to `"...may be significantly out of date. Treat with caution."` (`APPROXIMATE_STALE_MINUTES`), with a generic fallback when `locationCapturedAt` is missing. A `wasApproximateRef`/`justConfirmed` pair detects the true→false transition across polls (10s cadence while any alert is active, confirmed by reading `POLL_WITH_ACTIVE_MS` directly rather than assumed) and shows a green "Confirmed location — updated fix received" badge for `CONFIRMED_TRANSITION_MS` (8s) rather than the amber badge just silently vanishing on the next render.
+
+### Not yet verified
+
+Nothing above has run against the live dev database or a device yet — the schema `ALTER TABLE` needs to actually run (documented above and given to the user to execute, since it was blocked by the environment's permission classifier from being run directly), and the full send → miss → last-known-floor → late-PATCH → dashboard-badge-transition path needs a real SOS press with GPS deliberately slowed or unavailable to confirm end to end.
+
+---
+
+## 2026-08-26 — Phone couldn't reach the backend: preview builds had no API URL configured, ever
+
+A fresh Windows install changed the laptop's IP from `192.168.0.107` to `192.168.0.108`. The phone (preview build `a5e1da6a`, commit `024b660`) couldn't reach the backend afterward, and the assumption going in was one of the usual three: wrong IP now baked in, the server bound to `127.0.0.1` instead of all interfaces, or a fresh-install Windows Firewall with no rule for Node yet. **All three were checked against live evidence, not assumed, and none of them was actually it.**
+
+**Server binding — confirmed fine.** `server.js` calls `app.listen(config.port, callback)` with no host argument; Node's documented default with no host is to bind all interfaces (`INADDR_ANY`), not `127.0.0.1` — a common misreading of the "listening on `http://localhost:5000`" log line, which is just a human-readable label, not the actual bind address. Confirmed live via `Get-NetTCPConnection -State Listen`: `LocalAddress ::` (all interfaces) on port 5000.
+
+**Windows Firewall — confirmed fine.** An inbound `Allow` rule for `C:\Program Files\nodejs\node.exe` already existed (contrary to the "fresh install, never granted" assumption — worth checking rather than assuming), scoped to the `Public` profile. `Get-NetConnectionProfile` confirmed the Wi-Fi adapter is currently categorised `Public` on this network — matches the rule, so it was already permitting the connection.
+
+**The actual fault: `frontend/src/shared/config.js`'s `resolveApiUrl()` had nothing to resolve.** It checks `app.json`'s `extra.apiUrl` first, then Metro's own host (only present when a dev client is actually connected to Metro), then falls back to bare `localhost:5000`. Checked `git show 024b660:frontend/app.json` — the exact commit build `a5e1da6a` was made from, not the working tree, which had unrelated uncommitted edits on top — and found `"extra": {}`. Empty. A preview build has no Metro attached at runtime, so both of the first two checks came back empty and the function fell all the way to `http://localhost:5000`. Baked into the JS bundle at build time, resolved on the phone every launch — and `localhost` on the phone means the phone itself, not the laptop. This alone fully explains total failure regardless of IP, firewall, or server binding, and explains why the IP change was a red herring: **the app was never using an IP address at all.**
+
+**This means every preview build to date resolved to `localhost:5000` on-device, unconditionally — including the build tested for the 2026-08-17 background-tracking entry above.** That entry's "Not verified — needs the phone" section describes installing the APK and confirming background delivery, permission prompts, and the offline-queue-and-flush path. Anything in that verification pass that depended on a real network call to the backend (queue flush confirmation, any server round-trip) was not actually exercised — the app had no way to reach a server at all. Location capture and local queueing themselves may well have worked (those don't need the network), but **network-dependent claims from that entry, and from any other preview-build device test before this fix, should be treated as unverified until re-run against a build made after this fix.** Flagging this now rather than letting it stand silently — future work relying on "this was already verified on a preview build" should check the date against this entry first.
+
+### Fix — `EXPO_PUBLIC_API_URL`, resolved and validated at build time, no committed IP
+
+**`frontend/app.json` → `frontend/app.config.js`** (dynamic config; same content, same `extra.eas.projectId` `eas init` wrote in previously, same Android permissions and plugin config — nothing else about the config changed). The reason for converting rather than staying static: dynamic config can run real code during config resolution, which is what makes the build-time check below possible before this app.json → app.config.js conversion, that check could only ever have run after a build finished and someone launched the app.
+
+**Build-time check, in `app.config.js`.** `EAS_BUILD_PROFILE`/`EAS_BUILD` are set automatically by `eas build` (undefined for a plain local `expo start`, so this is a no-op outside of an actual EAS build). If the profile is `preview` or `production` and `process.env.EXPO_PUBLIC_API_URL` is unset, the config throws immediately — the build fails in the first seconds, before bundling or upload, naming exactly what's missing. `development` is exempt on purpose: the dev client doesn't need this, it still resolves from Metro's host at runtime, unchanged.
+
+**Runtime check, in `config.js`'s `resolveApiUrl()`, as a second line of defence.** Priority order is now: `process.env.EXPO_PUBLIC_API_URL` (Expo's own env-var convention, SDK 49+ — inlined into the bundle at build time, read directly, no `Constants`/`extra` roundabout needed) → if `__DEV__`, Metro's host, then bare `localhost` (unchanged dev-client behaviour) → otherwise, throw. A non-`__DEV__` build reaching the throw means `EXPO_PUBLIC_API_URL` was missing despite the build-time check — shouldn't happen for anything built through `eas build`, but this exists so a missing value is a loud crash on launch, never again a silent `localhost` fallback that looks like a working app until someone tries it off the same machine.
+
+**Where the value actually comes from, without a committed IP.** Rejected the obvious shortcut — hardcoding the current IP into `app.json`/`eas.json` — for the reason this whole incident demonstrates: it breaks the moment the router reassigns an address, or the moment a teammate builds from their own network. Instead: an **EAS environment variable**, scoped to the `preview` (and separately, `production`) environment, set via `eas env:create` and injected into the cloud build worker automatically — nothing in the repository names an IP. Chosen over the alternative of `eas build --local` (which would let a local gitignored `.env` reach the build directly) specifically because every build in this log so far has used `eas build --profile preview --platform android --non-interactive` — the cloud path — and this doesn't change that command at all, only what's required before running it.
+
+**`frontend/.env.example` added**, mirroring the existing `backend/.env.example` convention already in this repo — documents `EXPO_PUBLIC_API_URL` as an optional local override for the dev-client path only (forcing a specific address when Metro's auto-detection is wrong for someone's network), explicitly not the mechanism preview/production builds use.
+
+**`SETUP.md`** — the old "add `apiUrl` to `app.json`'s `extra`" troubleshooting paragraph is gone (that field doesn't exist anymore); replaced with the `.env` override for dev-client, and a new section 10 covering `eas env:create` for anyone building a preview APK, including what the fail-fast error looks like and why it's there.
+
+### Not yet run
+
+The `eas env:create` command itself was left for the user to run with their own current IP, same reasoning as the `ALTER TABLE` in the entry above — a build-affecting external action, not something to execute unasked. No preview build has been produced against this fix yet; the 44%-NULL SOS location work from the entry above and this network fix both need one real preview build, installed on a phone on the current network, to confirm end to end.
+
+---
+
+## 2026-08-26 — Follow-up: the fix above still didn't reach the backend. Real cause was Android cleartext policy, not the URL.
+
+Preview build `0984abb4` (commit `df7eef6`), built after the entry above, installed and still couldn't reach the backend, even with `eas env:list` confirming `EXPO_PUBLIC_API_URL` set correctly and the phone's own browser loading `http://192.168.0.108:5000/health` fine. Rather than guess again, every part of the previous fix was checked against live evidence before looking elsewhere.
+
+**Pulled the actual EAS build log for `0984abb4`, not just its status.** `eas-cli build:view` needs the full UUID, not the short id shown in the CLI output (`0984abb4-b82b-4836-8fe1-ae3b6ddbff96`, found via `eas-cli build:list --json`). The signed log URL GCS returns serves the log **brotli-compressed** (`Content-Encoding: br`) — a plain `curl` without `--compressed` silently saves the compressed bytes as garbage rather than erroring, which looked like a corrupted download at first. Decoded with Node's `zlib.brotliDecompressSync` instead, revealing Bunyan-style NDJSON build logs.
+
+**Confirmed, from that log, that every part of the previous fix worked exactly as designed:**
+- `SPIN_UP_BUILDER` phase printed `EXPO_PUBLIC_API_URL=http://192.168.0.108:5000` under "Project environment variables," alongside `EAS_BUILD=true` and `EAS_BUILD_PROFILE=preview` — the EAS environment variable reached the build worker correctly.
+- `EAGER_BUNDLE` phase ran a real Metro bundle (`Bundled 11039ms index.js (1015 modules)`), not a cache hit.
+- `app.config.js`'s build-time guard correctly did **not** throw — its condition matches the exact env var names the log shows were present, so it was right not to fire.
+
+**Not satisfied with log evidence alone, downloaded the actual installed APK and inspected the shipped JS bundle directly** (`assets/index.android.bundle` inside the `.apk`, a zip). `http://192.168.0.108:5000` appears verbatim, exactly once; the bare name `EXPO_PUBLIC_API_URL` appears zero times — proof Babel's `EXPO_PUBLIC_*` substitution actually ran and replaced the reference with the correct literal, not just that the env var existed somewhere upstream. `resolveApiUrl()`'s plain `process.env.EXPO_PUBLIC_API_URL` read (not destructured, not dynamically keyed) was the suspected weak point and turned out fully correct.
+
+**So the client was resolving and sending requests to the exactly correct URL. The request still never left the phone.** Checked `AndroidManifest.xml` inside the built APK directly (binary AXML, scanned for the relevant attribute/string names rather than assumed): neither `android:usesCleartextTraffic` nor a `networkSecurityConfig` reference exists anywhere in it, and no `res/xml/network_security_config.xml` resource is packaged. Neither `app.config.js` nor any plugin in this project sets either. **Android blocks all plain `http://` traffic app-wide by default for any app targeting API 28+ (Android 9), which every current Expo SDK 54 build does, unless the manifest explicitly opts back in.** `http://192.168.0.108:5000` is exactly the kind of request this blocks — indistinguishable, from `apiRequest`'s catch block, from any other "could not reach the server" failure.
+
+**Why the phone's own browser test didn't catch this:** the cleartext policy is declared per-app, in that app's own manifest. The browser is a separate installed app with its own — unrestricted for direct HTTP navigation. The browser test was genuinely valid evidence for network/firewall/server reachability (which is why layers 2 and 3 from the entry above really were clean), it just could never have validated this app's own traffic policy.
+
+**Why this never surfaced before now:** every prior preview build resolved to `localhost:5000` (the bug the entry above fixed) — the request was already going nowhere for a different reason before this layer was ever exercised. This build is the first one to get the URL right, which is exactly what exposed the layer underneath it.
+
+### Fix — `android.usesCleartextTraffic: true` in `app.config.js`
+
+**Deliberately marked temporary, with a comment at the point of use, and this entry.** `usesCleartextTraffic: true` is coarse — it allows plain HTTP for the whole app, not just requests to the local dev backend — which is acceptable only because this is a local-dev preview build talking to a LAN IP over `http://`. **This must not reach a production build.** Before one:
+
+- Replace it with a `network_security_config.xml` (`android.networkSecurityConfig` in `app.config.js`) scoped to private/local IP ranges only, so cleartext stays possible for local dev without opening it up app-wide, **or**
+- Drop the flag entirely once the backend is reachable over `https://`, which a real production deployment should be regardless.
+
+Flagged in three places on purpose, not just one, so it can't be missed by only reading one of them: the `app.config.js` comment at the flag itself, this `BUILD_LOG.md` entry, and `SETUP.md`'s preview-build section (section 10) — a `⚠️` callout there points back here.
+
+### Not yet run
+
+No preview build has been produced against this specific fix yet. Once one is, it needs a real device test confirming the app can reach the backend end to end — the thing that's been assumed working, then disproven, twice in this same investigation, so it isn't getting called done again without a device actually confirming it this time.
+
+---
+
+## 2026-08-26 — Follow-up: `usesCleartextTraffic` was set in the wrong place, never reached the manifest
+
+Preview build `aa8582c0` (commit `236a59cc`, built with the `usesCleartextTraffic` fix from the entry above) still failed with "unable to connect." Rather than assume the fix from the previous entry actually landed, it was checked directly, the same way the URL bug was — download the built APK, don't trust the source alone.
+
+**The bundle was clean.** `assets/index.android.bundle` inside `aa8582c0`'s APK contains `http://10.255.240.141:5000` verbatim, exactly once; the stale `192.168.0.108` is gone entirely; `EXPO_PUBLIC_API_URL` as a bare name is absent, same successful-substitution signature confirmed for the entry above. `git show 236a59cc:frontend/app.config.js` confirmed `usesCleartextTraffic: true` was genuinely present in the exact commit this build used.
+
+**The manifest was not.** `AndroidManifest.xml` inside the same APK, scanned for `usesCleartextTraffic`, `networkSecurityConfig`: **absent, both**. The flag set in `app.config.js` never reached the compiled manifest at all.
+
+**Root cause: `android.usesCleartextTraffic` set as a bare top-level key is not a real Expo config field.** It only takes effect through the `expo-build-properties` config plugin — a bare `android.usesCleartextTraffic: true` directly on the config, which is what the previous entry's fix did, is silently ignored by Expo's prebuild with no warning. Corroborating evidence sitting in the same build's own log, `PREBUILD` phase — Expo *does* warn about exactly this category of mistake for a different field:
+```
+» android: userInterfaceStyle: Install expo-system-ui in your project to enable this feature.
+```
+No equivalent warning fired for `usesCleartextTraffic` — it isn't a recognized key at all outside the plugin, so prebuild had nothing to warn about; it just dropped it.
+
+Also checked, since the user asked directly: whether "unable to connect" (`LoginScreen.js`'s wording for `err.name === 'NetworkError'`) could be masking a non-network failure — a JSON parse error or a CORS rejection. Neither applies: `client.js`'s `safeParse()` catches `JSON.parse` failures internally and never throws, and CORS is a browser-only concept `fetch` in React Native doesn't enforce. Confirmed a genuine `fetch()`-level rejection, consistent with Android's network stack refusing the plain-HTTP connection before it leaves the device — the same failure shape as before, because it was the same underlying cause, not yet actually fixed.
+
+### Fix — `expo-build-properties` installed, `usesCleartextTraffic` moved into its `plugins` entry
+
+`npx expo install expo-build-properties` (matches SDK 54, same convention as every other native module in this project). `app.config.js`: removed the no-op bare `android.usesCleartextTraffic` key; added
+```js
+[
+  'expo-build-properties',
+  { android: { usesCleartextTraffic: true } },
+],
+```
+to the `plugins` array. Verified against Expo's own tooling, not just re-read as source: `npx expo config --type introspect` now shows `'android:usesCleartextTraffic': 'true'` in the resolved native manifest attributes — this simulates the real prebuild mods pipeline, so it's the closest confirmation short of another full build-and-download cycle that the attribute will actually land this time.
+
+**Same production warning, same three places, updated to point at the real mechanism.** The comment now sits on the `expo-build-properties` plugin entry rather than a bare key (`app.config.js`), `SETUP.md`'s preview-build section (section 10) now says "via the `expo-build-properties` plugin" rather than describing a bare key, and this entry. All three still say the same thing: this must not reach a production build, and now they also say why the mechanism matters — a bare key looking right in the source is not the same as it actually reaching the manifest, which is exactly what went wrong here.
+
+### Not yet run
+
+No preview build has been produced against this fix yet. Given the last two entries in this log each assumed a fix worked and were wrong, the next build needs a real download-and-inspect check of its APK (bundle URL, manifest attribute) before calling it done, not just a device test — the device test alone is what looked like success right up until "unable to connect" showed up anyway.
+
+---
+
+## 2026-08-27 — SOS accuracy reconsidered: `Accuracy.High` for the SOS capture path only (proposed, not yet implemented)
+
+**Live confirmation the async-attach mechanism (024b660, entry above) works end to end on a real device.** An SOS at 22:08 landed a fresh fix six seconds before `triggered_at`: `location_is_approximate = false`, `location_captured_at` set, the `PATCH /emergency/alerts/:id/location` path exercised for real, not just verified from a bundle/manifest download as the last several entries had to settle for.
+
+**But the position is materially wrong on the map, and `location_accuracy_meters = 100.00` exactly.** Matches the flat-bucket finding from the 2026-08-26 entry above, now with the actual mechanism confirmed. Checked `node_modules/expo-location`'s own type definitions this time rather than inferring from the live number alone: the `LocationAccuracy` enum documents `Balanced` as "*accurate to within one hundred meters*" and `High` as "*accurate to within ten meters of the desired target*" — `100.00` isn't a bug or a coincidence, it's Android reporting back exactly the ceiling `Balanced` asks for. `captureLocation.js`'s `readPosition()` has requested `Location.Accuracy.Balanced` unconditionally since Phase 1 step 2, inherited into `beginSosLocationCapture` on 026b660 without being reconsidered — SOS capture has never once asked the OS for better than 100m.
+
+### Why `Balanced` was the right call on 2026-08-26, and why that no longer holds
+
+At the time of the 44%-NULL entry, the only capture path was a single `Promise.race` inside the 4.5-second send window — a fix that hadn't landed by then was discarded outright, no second chance. Forcing `Accuracy.High` (slower time-to-first-fix, since GPS-grade lock takes longer to acquire than a network/cell/Wi-Fi fused `Balanced` reading) under that hard ceiling would have raised the NULL rate, not lowered it — trading a coarse-but-present reading for a better-but-frequently-absent one is a worse trade for an emergency alert. Staying `Balanced` was the correct call against that constraint.
+
+**That entry's own fix removed the constraint it was reasoned against, without the accuracy tier itself being revisited.** `beginSosLocationCapture`'s `full` read already keeps running past the 4.5s send gate, up to `SOS_LOCATION_ASYNC_CEILING_MS`, independent of what accuracy tier it requests — the send is never gated on accuracy already, only on time. `Accuracy.High`'s slower TTFF now costs nothing at send time (the alert fires at 4.5s regardless, on whatever's settled — fresh fix or last-known floor) and only affects how long the async attach keeps watching before giving up on an upgrade. The original objection was sound against the architecture that existed when it was made; it stopped applying the same day the async-attach path shipped, and nobody came back to check.
+
+### Proposed change — `captureLocation.js`
+
+`readPosition()` gains an `accuracy` parameter, defaulting to `Location.Accuracy.Balanced` (unchanged behavior for every existing caller). `beginSosLocationCapture({ timeoutMs, accuracy = Location.Accuracy.High })` passes `Location.Accuracy.High` as its own default — SOS-only, since this function has no other caller. `captureCurrentLocation` (mount-time "Location sharing" card, `FallDetectionScreen.js`, `AmbulanceBookingScreen.js`) and `backgroundLocationTask.js`'s continuous tracking are untouched — still `Balanced`, still Balanced's own justification (battery cost of *continuous, all-day* sampling — see the 2026-08-16 entry — which is a real tradeoff that a one-shot SOS request doesn't share). `captureLastKnownLocation()` is unaffected either way — `getLastKnownPositionAsync` has no accuracy parameter; the cached fix it returns carries whatever accuracy it was originally captured at.
+
+### Timing — `SOS_LOCATION_TIMEOUT_MS` stays at 4500; `SOS_LOCATION_ASYNC_CEILING_MS` should move from 25,000 to something larger, proposed 45,000
+
+**4.5s send gate: unchanged, and not up for reconsideration by this change.** It was never a function of accuracy tier — it's the "the alert must never wait on GPS" product constraint, enforced by racing the countdown regardless of what `readPosition` asks the OS for. Nothing about switching to `High` touches this number.
+
+**25s async ceiling: was sized against `Balanced`'s typical settle time, not `High`'s.** `Accuracy.High` on Android still uses the fused provider — it is not GPS-only, and does not disable Wi-Fi/cell signals — but it prioritizes holding out for a GPS-grade lock, and cold-start GPS time-to-first-fix with A-GPS assistance commonly runs 5–30s under open sky, and can exceed that in marginal signal (partial sky view, near buildings). 25s risks cutting off a meaningful share of fixes that would have landed at 30–40s and gotten nothing instead — the exact failure mode this whole mechanism exists to reduce. Proposing 45,000ms as a middle ground: covers the bulk of realistic outdoor `High` fixes without holding the async attach open indefinitely for a fix that was never going to resolve. This is a judgment call, not a measured number — no live `High`-accuracy timing data exists yet on this device; worth confirming empirically after the change ships rather than treating 45s as final.
+
+### Battery cost — honestly, not a real tradeoff here
+
+A single `High`-accuracy one-shot request, bounded by the (proposed) 45s ceiling, draws GPS power only for that window, only when SOS is actually pressed — a rare event, not routine. Even at the high end of GPS active-acquisition power draw, 45 seconds of it is a rounding error against a phone's daily battery budget, nowhere close to a cost worth trading location accuracy against for an emergency alert. Worth flagging honestly: the 2026-08-16 background-tracking entry justified `Balanced` for SOS capture partly by analogy to background tracking's *own* battery reasoning ("it's the same accuracy SOS-time capture already uses, for the same reason") — but that analogy was weak even then. Background tracking's battery cost is real because it recurs continuously, all day, thousands of samples; SOS capture is one-shot and rare. The two were never actually the same tradeoff, and this change stops treating them as one.
+
+### Indoors, where GPS can't resolve at all
+
+Two separate things stay unaffected by this change:
+
+1. **The 4.5s send-time last-known-position fallback (`captureLastKnownLocation`) is a completely separate code path** — no radio use, doesn't touch `readPosition` or its accuracy setting at all. Indoors, a fresh fix (of any accuracy tier) very rarely lands within 4.5s; the alert still sends with whatever cached position the OS has, marked `isApproximate: true`, exactly as today.
+2. **`Accuracy.High` does not mean GPS-only.** Android's fused provider still blends network/Wi-Fi signals under `High` priority — it asks for GPS-grade accuracy when achievable, it doesn't refuse a network-derived estimate when GPS can't lock. So indoors, where GPS characteristically can't resolve regardless of the accuracy setting requested, the async-attach path should degrade toward roughly the same behavior `Balanced` has today, not meaningfully worse.
+
+**Flagged rather than asserted as certain, per this log's own standing rule of checking live evidence instead of assuming it:** exactly how quickly Android's fused provider hands back a network-derived estimate under `High` priority when GPS can't lock — versus how readily it does the same under `Balanced` — is Android/OEM implementation behavior neither `expo-location`'s types nor this codebase document, and nothing here has tested it. Worth a deliberate indoor SOS test after this ships, alongside the outdoor timing check above, rather than assuming parity with `Balanced` indoors.
+
+The one true residual gap — no cached position exists at all *and* nothing resolves within the ceiling (first-ever app use, indoors, no network-derived signal either) — predates this change and isn't touched by it either way.
+
+### Not yet run
+
+**No code has been changed.** This entry documents the proposed change and its reasoning, put here before implementation per the same "evidence and reasoning before claiming done" discipline as every other entry in this log. Once `captureLocation.js` is edited, this needs: a preview build, an outdoor SOS test comparing `location_accuracy_meters` against the current 100.00 baseline and confirming the position lands correctly on the map, an indoor SOS test confirming the last-known-floor and async-attach behavior described above, and a rough measurement of how long real `High`-accuracy fixes actually take on this device outdoors — to confirm or correct the proposed 45s ceiling rather than leaving it as an untested guess.
+
+---
+## 2026-08-28 — Phase 1 step 4: family links, emergency contacts, and the family broadcast push tier, backend only
+
+**Correction to how this entry originally read.** The first version of this entry, and the code it described, had accepting a family invite automatically create an `emergency_contacts` row for the invitee. That was wrong and has been reverted before ever being committed — dashboard access (`family_links`) and being phoned during a crisis (`emergency_contacts`) are different permissions on purpose (see the `family_links` comment in `schema.sql`), and collapsing them into one action on accept contradicted that. Promoting a link to contact status is now its own deliberate endpoint (piece 3, below), never a side effect of accepting. Flagging the correction here rather than pretending the first version never happened.
+
+**Four pieces, this entry covers all of them:**
+
+- **1a** — `POST /family/invites`: create/reissue an invite. Unchanged from the original version of this entry.
+- **1b** — `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id`: hand-entered emergency contact CRUD. New in this revision — `backend/emergency/contacts.js` (data access) plus additions to `backend/emergency/validate.js` and `backend/emergency/routes.js`.
+- **2** — the family broadcast push tier: every actively-linked family member gets pushed once when an SOS fires, independent of the `emergency_contacts` escalation fanout. New module `backend/emergency/notifications/broadcast.js`, called fire-and-forget from `POST /emergency/alerts` alongside `advanceFanout`, own `.catch()`.
+- **3** — `POST /family/links/:id/emergency-contact`: the deliberate, explicit action that promotes an active link to contact status. Lives in `backend/family/routes.js`, since it operates on a link by id.
+
+Piece 1a's accept/decline/revoke endpoints and `GET /family/links` are otherwise unchanged from before, except: accept no longer touches `emergency_contacts` at all (see the correction above), and revoke's contact-deactivation cleanup — always built as described in the previous version of this entry — now has something to actually clean up once piece 3 has been used, rather than being permanently dead code as it was in the reverted version.
+
+### Decision: piece 3 is a link-scoped action, not a general "add this user as a contact" endpoint
+
+`POST /family/links/:id/emergency-contact` takes no body — it reads everything it needs (`full_name`/`phone`/`email`, `relationship`) off the link and the linked user's account. This keeps the permission check simple and exact: `hasManageContactsPermission(actor, link.elderly_user_id)`, the same helper `/emergency/contacts` uses, now in `family/links.js` since both modules need it. It returns `true` for the elderly user themselves without a row to check, and otherwise requires an `active` `family_links` row with `can_manage_contacts = true` — not necessarily the row named in the URL; an owner-permission family member can escalate someone else's link, same as they can send invites on the elderly person's behalf.
+
+### Decision: friendly pre-check in piece 3, constraint-only in piece 1b
+
+Piece 3's spec explicitly asked for an app-level pre-check ahead of `uq_contact_per_user`, for a better error than a raw constraint violation — `findContactByPhone` runs first, and a match throws `409 contact_already_exists` with the existing contact attached. The `uq_contact_per_user` catch stays underneath it as the real backstop, since the pre-check is a query-then-insert and a concurrent request could still race past it — the comment at the point of use says so.
+
+Piece 1b's `POST /emergency/contacts` does **not** pre-check; it relies on catching the constraint violation, same as `/auth/register` already does for duplicate phone numbers ("relying on the unique constraint rather than a pre-check: two simultaneous registrations would both pass a pre-check and one would still fail here"). No spec asked for a friendlier message on this path, and the existing codebase convention for exactly this shape of problem is catch-the-constraint, not pre-check — so that's what it does.
+
+### Decision: the broadcast tier does not deduplicate against the escalation tier
+
+Confirmed live: a family member who is both actively linked and (via piece 3) an emergency contact gets two `notifications` rows for the same alert — one `channel: 'push', emergency_contact_id: NULL` from the broadcast tier, one from the fanout tier with `emergency_contact_id` set to their contact row. This was a explicit call, not an oversight: a duplicate push is a minor annoyance, a missed one during a real emergency is not an acceptable trade to avoid it.
+
+### Decision: soft delete has no undelete path
+
+`DELETE /emergency/contacts/:id` sets `is_active = FALSE` rather than removing the row — `notifications.emergency_contact_id` needs something real to point back at. Nothing PATCHes `is_active` back to `true`, and it isn't in the set of fields `validateUpdateContactBody` accepts, so re-adding a deleted contact's phone number collides with `uq_contact_per_user` and fails as `contact_already_exists`. Recorded as a known limitation rather than solved here — an undelete would need either a PATCH-able `is_active` (with its own permission story) or a dedicated endpoint, neither built in this pass.
+
+### Known limitations, carried over and one new one
+
+**Pre-registration invites still do not work** — unchanged from the original version of this entry, see API.md.
+
+**The emergency-contact copy still goes stale silently** — same underlying issue as before, now attached to piece 3 (`POST /family/links/:id/emergency-contact`) instead of accept, since that's the action that actually performs the copy now. `contactUserId !== null` remains the only signal a future contacts screen has that a row is linked-account-derived; nothing here builds that screen.
+
+**Soft-deleted contacts cannot be undeleted through the API** — new in this revision, see above.
+
+### Not yet run
+
+**Backend only, by design** — no screens were built. Every decision above was exercised live against a running server and a live PostgreSQL database, not just reasoned from source, using disposable synthetic accounts since discarded:
+
+- Accept confirmed to create **no** `emergency_contacts` row (regression check on the corrected behavior).
+- Piece 3: permission denial for a `view`-level family member without `can_manage_contacts`; successful escalation by an `owner`/`can_manage_contacts` family member, with `contactUserId`/`phone`/notify-defaults all confirmed on the returned row; escalating the same link twice returns `409 contact_already_exists`.
+- Piece 2: an SOS fires against two actively-linked family members, one of whom (via piece 3) is also an emergency contact. Confirmed via direct query: the contact-and-linked family member gets exactly one broadcast-tier row (`emergency_contact_id NULL`) **and** exactly one fanout-tier row (`emergency_contact_id` set) for the same alert — the no-dedup decision confirmed working, not just described. The family-member-only account gets exactly one row, broadcast tier only.
+- Revoking the escalated link confirmed to flip that contact's `is_active` to `false`.
+- Piece 1b: permission denial for a non-permitted family member; create (self, and confirmed `contactUserId: null`); duplicate-phone conflict; list; `PATCH` with only `priority` (confirmed other fields untouched); soft delete, confirmed excluded from the subsequent list, and confirmed `404` on both `PATCH` and `DELETE` of an already-deleted contact; permission re-checked and confirmed denied after the underlying link was revoked.
+
+Not yet exercised: anything from the mobile app itself — every check above was a direct HTTP call, not a request from an actual device or the Expo client. Also not exercised live: `PATCH /emergency/contacts/:id` changing `phone` or `email` themselves (only `priority` was tested), and the family-member-invites-on-behalf-of-the-elderly-user path for `POST /family/invites` (only the elderly-self path has been exercised live, in this and the previous version of this entry).

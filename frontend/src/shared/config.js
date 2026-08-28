@@ -1,23 +1,5 @@
 // ============================================================================
-// Where the backend is
-//
-// The first thing that breaks when you run this on a real phone: the phone is
-// not the computer. `http://localhost:5000` on a handset means the handset
-// itself, so every request fails with a network error and nothing explains why.
-//
-// The address is worked out in this order:
-//
-//   1. `expo.extra.apiUrl` in app.json, if it is set. Use this for a deployed
-//      backend, or when the automatic answer is wrong.
-//   2. The IP address of the computer running Metro, which Expo already tells
-//      the app so it knows where to fetch the JavaScript bundle from. That
-//      computer is also running the backend during development, so reusing the
-//      address means nobody has to look up their own IP or edit a file to get
-//      started.
-//   3. localhost, as a last resort. Correct in a web browser on the same
-//      machine, wrong on a phone — but by then there is no better guess.
-//
-// The phone and the computer have to be on the same Wi-Fi network either way.
+// Application Configuration & Environment Settings
 // ============================================================================
 
 import Constants from 'expo-constants';
@@ -38,24 +20,53 @@ function metroHost() {
   return host || null;
 }
 
+/**
+ * Phase 1 step 5. `EXPO_PUBLIC_API_URL` — inlined into the bundle at build
+ * time by Expo's own env-var convention (SDK 49+), same value app.config.js
+ * requires for a preview/production EAS build before it will even build (see
+ * that file) — always wins when set.
+ *
+ * Below that, only __DEV__ builds (dev client / Expo Go) fall back to
+ * Metro's own host, then to bare localhost — both fine there, since a dev
+ * client is either running on the same machine as the backend or is actively
+ * connected to Metro on the machine that is. A non-__DEV__ build (preview or
+ * production) reaching this point means EXPO_PUBLIC_API_URL was missing —
+ * app.config.js's build-time check exists to make that impossible for an EAS
+ * build, but this is the last line of defence, so it throws rather than
+ * silently resolving to a localhost address that can never reach a real
+ * server from an installed APK. This is exactly the failure mode that put
+ * every SOS location capture in doubt until it was traced — see
+ * BUILD_LOG.md, 2026-08-26.
+ */
 function resolveApiUrl() {
-  const configured = Constants.expoConfig?.extra?.apiUrl;
+  const configured = process.env.EXPO_PUBLIC_API_URL;
 
-  // Checked for being a non-empty string, not merely truthy. Expo resolves a
-  // `null` in app.json to `{}`, which passes a truthy test and would make the
-  // base URL the string "[object Object]" — every request then fails with a
-  // network error that points nowhere near the actual mistake.
   if (typeof configured === 'string' && configured.trim() !== '') {
     return configured.trim().replace(/\/+$/, '');
   }
 
-  const host = metroHost();
-  if (host) return `http://${host}:${BACKEND_PORT}`;
+  if (__DEV__) {
+    const host = metroHost();
+    if (host) return `http://${host}:${BACKEND_PORT}`;
+    return `http://localhost:${BACKEND_PORT}`;
+  }
 
-  return `http://localhost:${BACKEND_PORT}`;
+  throw new Error(
+    'EXPO_PUBLIC_API_URL is not set. This build has no way to reach a backend — ' +
+      'refusing to silently fall back to localhost, which can never work from an ' +
+      'installed app. See SETUP.md.'
+  );
 }
 
 export const API_URL = resolveApiUrl();
 
 /** How long a request may take before it is given up on, in milliseconds. */
 export const REQUEST_TIMEOUT_MS = 15000;
+
+/** Configurable 24/7 Emergency Response Center contact number. */
+export const EMERGENCY_RESPONSE_CENTER_PHONE =
+  Constants.expoConfig?.extra?.responseCenterPhone || '+919876543210';
+
+/** Configurable Emergency Response Center desk name. */
+export const EMERGENCY_RESPONSE_CENTER_NAME =
+  Constants.expoConfig?.extra?.responseCenterName || 'ElderCare 24/7 Emergency Response Desk';

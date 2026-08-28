@@ -17,6 +17,13 @@ export const colors = {
   primary: '#1D4ED8',
   danger: '#B91C1C',
   success: '#047857',
+  // Approximate-location marking on the family dashboard (Phase 1 step 4) —
+  // deliberately its own color, not reused danger/success: an approximate
+  // position is a different kind of signal from the alert's own severity or
+  // from a confirmed reading, and conflating them would blur two different
+  // facts into one color.
+  warning: '#B45309',
+  warningBg: '#FEF3C7',
 };
 
 export const spacing = {
