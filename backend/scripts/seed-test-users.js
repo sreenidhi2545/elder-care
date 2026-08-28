@@ -39,6 +39,29 @@ const TEST_USERS = [
   { phone: '9000000004', fullName: 'Test Admin', role: 'admin' },
 ];
 
+// POST /family/invites now exists, but going through invite-then-accept here
+// would just be two more upsert-shaped round trips for the same deterministic
+// result this script already produces directly. Written straight to 'active'
+// so the seeded family account can exercise every gated action immediately,
+// with no invite left pending for someone to accept by hand first.
+const TEST_FAMILY_LINK = { elderlyPhone: '9000000001', familyPhone: '9000000002' };
+
+// Accepting a family invite now auto-creates one of these (see
+// backend/family/contactSync.js), but there is still no endpoint to manage
+// emergency_contacts by hand — add/edit/remove/reorder remains unbuilt (see
+// API.md, "Not yet built"), so seeding still writes the row directly. Two
+// contacts, deliberately different:
+// #1 is also the seeded family account, so fanout has a real contact_user_id
+// to find a device token for once one is registered — the only way to
+// exercise the push channel without a third real phone. #2 has no
+// contact_user_id at all, so escalating past #1 is actually testable, and
+// gives the email/SMS "not configured" failure path something to record
+// against a destination that isn't also a real app account.
+const TEST_EMERGENCY_CONTACTS = [
+  { elderlyPhone: '9000000001', fullName: 'Test Family', contactPhone: '9000000002', contactUserPhone: '9000000002', email: null, priority: 1 },
+  { elderlyPhone: '9000000001', fullName: 'Test Neighbour', contactPhone: '9000000099', contactUserPhone: null, email: 'neighbour@example.test', priority: 2 },
+];
+
 const password = process.argv[2];
 
 if (!password) {
@@ -62,6 +85,8 @@ if (config.nodeEnv === 'production') {
 const passwordHash = await hashPassword(password);
 
 console.log(`Seeding ${TEST_USERS.length} test accounts into ${config.databaseUrl.replace(/:[^:@]*@/, ':****@')}\n`);
+
+const idByPhone = {};
 
 for (const user of TEST_USERS) {
   const normalized = normalizePhone(user.phone);
@@ -87,7 +112,73 @@ for (const user of TEST_USERS) {
   );
 
   const row = rows[0];
+  idByPhone[user.phone] = row.id;
   console.log(`  ${row.phone.padEnd(15)} ${row.role.padEnd(10)} ${row.inserted ? 'created' : 'updated'}`);
+}
+
+const elderlyId = idByPhone[TEST_FAMILY_LINK.elderlyPhone];
+const familyId = idByPhone[TEST_FAMILY_LINK.familyPhone];
+
+if (elderlyId && familyId) {
+  // Upsert on (elderly_user_id, family_user_id): re-running resets the
+  // permissions and status rather than colliding with the UNIQUE constraint.
+  const { rows } = await query(
+    `INSERT INTO family_links
+       (elderly_user_id, family_user_id, permission_level, status,
+        can_view_location, can_manage_contacts, can_manage_caregivers, can_acknowledge_alerts,
+        approved_at)
+     VALUES ($1, $2, 'owner', 'active', TRUE, TRUE, TRUE, TRUE, now())
+     ON CONFLICT (elderly_user_id, family_user_id) DO UPDATE
+        SET permission_level       = EXCLUDED.permission_level,
+            status                 = EXCLUDED.status,
+            can_view_location      = EXCLUDED.can_view_location,
+            can_manage_contacts    = EXCLUDED.can_manage_contacts,
+            can_manage_caregivers  = EXCLUDED.can_manage_caregivers,
+            can_acknowledge_alerts = EXCLUDED.can_acknowledge_alerts,
+            approved_at            = EXCLUDED.approved_at
+     RETURNING id, (xmax = 0) AS inserted`,
+    [elderlyId, familyId]
+  );
+
+  const link = rows[0];
+  console.log(`  family_link     ${TEST_FAMILY_LINK.familyPhone} -> ${TEST_FAMILY_LINK.elderlyPhone}  ${link.inserted ? 'created' : 'updated'}`);
+} else {
+  console.error('  family_link     SKIPPED — one or both test users were not seeded');
+  process.exitCode = 1;
+}
+
+for (const contact of TEST_EMERGENCY_CONTACTS) {
+  const elderlyContactId = idByPhone[contact.elderlyPhone];
+  const contactPhone = normalizePhone(contact.contactPhone);
+  const contactUserId = contact.contactUserPhone ? idByPhone[contact.contactUserPhone] : null;
+
+  if (!elderlyContactId || !contactPhone.ok) {
+    console.error(`  emergency_contact SKIPPED — ${contact.fullName}`);
+    process.exitCode = 1;
+    continue;
+  }
+
+  // Upsert on (user_id, phone), the same UNIQUE constraint the table already has.
+  const { rows } = await query(
+    `INSERT INTO emergency_contacts
+       (user_id, contact_user_id, full_name, phone, email, priority,
+        notify_by_sms, notify_by_call, notify_by_push, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, TRUE, TRUE)
+     ON CONFLICT (user_id, phone) DO UPDATE
+        SET contact_user_id = EXCLUDED.contact_user_id,
+            full_name       = EXCLUDED.full_name,
+            email           = EXCLUDED.email,
+            priority        = EXCLUDED.priority,
+            notify_by_sms   = EXCLUDED.notify_by_sms,
+            notify_by_call  = EXCLUDED.notify_by_call,
+            notify_by_push  = EXCLUDED.notify_by_push,
+            is_active       = TRUE
+     RETURNING id, (xmax = 0) AS inserted`,
+    [elderlyContactId, contactUserId, contact.fullName, contactPhone.value, contact.email, contact.priority]
+  );
+
+  const row = rows[0];
+  console.log(`  emergency_contact  priority ${contact.priority}  ${contact.fullName.padEnd(14)} ${row.inserted ? 'created' : 'updated'}`);
 }
 
 console.log('\nSign in with any of the numbers above and the password you passed.');

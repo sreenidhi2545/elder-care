@@ -4,7 +4,7 @@
 
 Team: Sree · [Teammate B] · [Teammate C]
 Companion to `PROJECT_REPORT.md` — read that first for the full project picture.
-Document version: 2.0
+Document version: 2.1
 
 ---
 
@@ -196,6 +196,23 @@ Never commit `.env` or any real keys. Use `.env.example` for templates. Run `git
 Three of the six steps are complete. The remaining work is the mobile side: the Expo
 app shell, then the login and registration screens that call the auth endpoints above.
 
+**Emergency core (Phase 1) — complete, verified on real devices**
+- SOS button with a cancellable five-second countdown, the `alerts` row it creates, owner-only cancel and family-eligible resolve, and a family dashboard showing both active alerts and alert history
+- GPS location capture — permission handling with a plain-language explanation before the OS prompt, a location-storage endpoint, and location captured on the alert itself at the moment SOS fires; never a precondition for sending the alert
+- Emergency contact notification fanout in `emergency_contacts.priority` order across push, SMS and voice call, with escalation to the next contact on no acknowledgement, and acknowledgement via a push action button
+- Push delivered end to end on a real device, through a real EAS project (`@sree25/eldercare`); SMS and voice attempts are recorded with a clear failure reason (Twilio not yet configured, and DLT registration still pending for production — see the milestone note under Phase 1 in section 8) rather than silently skipped
+- Alerts never auto-expire — only `cancel` or `resolve` closes one; escalation only adds further notification attempts
+
+### Phase 1 — steps
+
+| Step | Status | Owner |
+|---|---|---|
+| 1. SOS button and alert record | **Done** | Sree |
+| 2. GPS location capture | **Done** | Sree |
+| 3. Emergency contact notification and escalation | **Done** | Sree |
+
+All three steps are built and verified on real devices. See `BUILD_LOG.md` for the per-step decisions and verification detail.
+
 ### What happens after Phase 0
 
 Once Phase 0 is merged into `main`, all three modules run in parallel — Sree starts Phase 1, [Teammate B] starts Phase 2, and [Teammate C] starts Phase 5.
@@ -215,3 +232,81 @@ Once Phase 0 is merged into `main`, all three modules run in parallel — Sree s
 | 4 | Caregiver depth — plans, reports, tasks, reviews | [Teammate B] |
 | 5 | Emergency response services — ambulance, disaster, response center, fall | [Teammate C] |
 | 6 | Polish & delivery | All three |
+
+---
+
+## 8. Step-by-step breakdown — every phase
+
+The table above is the summary. This is what each phase actually involves, step by step, so anyone reading this document knows what the project involves end to end without having to ask. This is the plan, not a progress report — for what's actually been built so far, see `BUILD_LOG.md`.
+
+### Phase 0 — Foundation
+
+| Step | What it covers | Owner |
+|---|---|---|
+| 1 | Database schema — design and apply every shared and module table | Sree |
+| 2 | Backend server and database connection | Sree |
+| 3 | Authentication and user roles — register, log in, refresh, roles | Sree |
+| 4 | Expo app shell and role-based navigation | Sree |
+| 5 | Login and registration screens | [Teammate C] |
+| 6 | API contract (`API.md`) — established here, extended every phase after | Sree |
+
+### Phase 1 — Emergency Core
+
+| Step | What it covers | Owner |
+|---|---|---|
+| 1 | SOS button and alert record — the one-touch trigger, the alert row it creates, cancelling and resolving an alert, and a family dashboard showing active alerts and alert history | Sree |
+| 2 | GPS location capture — device permission handling with a plain-language explanation, a location-storage endpoint, location captured on the alert itself at the moment SOS fires, and the family dashboard showing it where the elderly user has permitted it | Sree |
+| 3 | Emergency contact notification — fanout to `emergency_contacts` in priority order by SMS, call and push; escalation to the next contact if nobody acknowledges; alerts do not auto-expire, only a person closes one | Sree |
+
+> **Milestone:** SMS to Indian phone numbers requires DLT (telecom regulator) registration before it will reach real numbers in production. The client is arranging this registration, and it takes weeks — it needs to start well ahead of step 3 going live. Development and testing of step 3 does not depend on it; only sending real SMS to real Indian numbers in production does.
+
+### Phase 2 — Caregiver Core
+
+| Step | What it covers | Owner |
+|---|---|---|
+| 1 | Caregiver profiles and search | [Teammate B] |
+| 2 | Caregiver booking — a family requests and confirms a caregiver | [Teammate B] |
+| 3 | Scheduling — set and view visit times | [Teammate B] |
+| 4 | Attendance tracking — caregiver check-in and check-out | [Teammate B] |
+
+### Phase 3 — Safety Layer
+
+> **Milestone:** this phase begins with a development build, not Expo Go. Background location — reading the user's position while the app is not in the foreground — needs native modules Expo Go cannot run. Moving to a custom dev client (step 1 below) has to happen before any of the background-location work that depends on it.
+
+| Step | What it covers | Owner |
+|---|---|---|
+| 1 | Development build — move off Expo Go to a custom dev client | Sree |
+| 2 | Background location tracking | Sree |
+| 3 | Geofencing — define safe zones per elderly user, detect when one is left | Sree |
+| 4 | Real-time layer — a WebSocket connection for live location and alert delivery | Sree |
+| 5 | Family live map and safety dashboard — live location, recent alerts, and status | Sree |
+
+### Phase 4 — Caregiver Depth
+
+| Step | What it covers | Owner |
+|---|---|---|
+| 1 | Care plan management — create and manage a care plan per elderly user | [Teammate B] |
+| 2 | Daily activity reports — caregivers log daily activities | [Teammate B] |
+| 3 | Task assignment — assign tasks to caregivers | [Teammate B] |
+| 4 | Ratings and reviews — families rate caregivers | [Teammate B] |
+
+### Phase 5 — Emergency Response Services
+
+Ambulance booking and disaster alerts connect to outside providers the client is still arranging — see the "Note on Phase 5" in section 4. Each step below is built as a full working screen against a mock or placeholder connection now, and is wired to the real provider later without the screen itself changing.
+
+| Step | What it covers | Owner |
+|---|---|---|
+| 1 | Ambulance booking — pickup location, destination hospital, submit, and a status view, against a mock provider | [Teammate C] |
+| 2 | Disaster alerts — a list screen for area warnings with severity and time, against a placeholder feed | [Teammate C] |
+| 3 | 24/7 emergency response center — a contact screen with a call button and information | [Teammate C] |
+| 4 | Fall detection — a manual "I fell" trigger that raises an alert; automatic sensor-based detection is a later version, not this phase | [Teammate C] |
+
+### Phase 6 — Polish & Delivery
+
+| Step | What it covers | Owner |
+|---|---|---|
+| 1 | Accessible design — large text, high contrast, simple flow, applied across every screen | All three, each on their own module |
+| 2 | Location retention purge — the scheduled deletion job for `locations` rows older than 30 days, deferred here since the day-to-day product doesn't need it yet | Sree |
+| 3 | Testing across the main flows | All three |
+| 4 | Final demo build via Expo | All three |
+| 5 | Handover documentation for the client | All three |

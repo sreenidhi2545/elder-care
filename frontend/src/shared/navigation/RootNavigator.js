@@ -10,14 +10,14 @@
 
 import { useAuth } from '../auth/AuthContext';
 import { LoadingScreen } from '../screens/LoadingScreen';
-import { LoginScreen } from '../screens/LoginScreen';
+import { AuthNavigator } from './AuthNavigator';
 import { AppNavigator } from './AppNavigator';
 
 export function RootNavigator() {
   const { status } = useAuth();
 
   if (status === 'restoring') return <LoadingScreen />;
-  if (status === 'signedOut') return <LoginScreen />;
+  if (status === 'signedOut') return <AuthNavigator />;
 
   return <AppNavigator />;
 }

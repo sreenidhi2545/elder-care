@@ -29,4 +29,5 @@ export class ApiError extends Error {
 export const badRequest = (code, message, extra) => new ApiError(400, code, message, extra);
 export const unauthorized = (code, message) => new ApiError(401, code, message);
 export const forbidden = (code, message) => new ApiError(403, code, message);
-export const conflict = (code, message) => new ApiError(409, code, message);
+export const notFound = (code, message) => new ApiError(404, code, message);
+export const conflict = (code, message, extra) => new ApiError(409, code, message, extra);
