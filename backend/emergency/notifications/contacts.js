@@ -1,10 +1,11 @@
 // ============================================================================
 // Reads used by fanout — emergency_contacts and device_tokens.
 //
-// No endpoint creates emergency_contacts yet — same situation family_links
-// was in before Phase 1 step 1: rows exist only if created directly (see
-// backend/scripts/seed-test-users.js). Managing contacts from the app is not
-// this step's scope. See BUILD_LOG.md.
+// Rows reach this table two ways: written directly (see
+// backend/scripts/seed-test-users.js), or auto-created when a family invite
+// is accepted (backend/family/contactSync.js). There is still no endpoint to
+// manage a contact by hand — add/edit/remove/reorder is not this step's
+// scope. See BUILD_LOG.md.
 // ============================================================================
 
 import { query } from '../../shared/db/pool.js';

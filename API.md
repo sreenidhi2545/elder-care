@@ -1,11 +1,11 @@
 # ElderCare — API Contract
 
-**Version:** 0.4 — Phase 0 (authentication) + Phase 1 steps 1-3 (SOS button, alert record, GPS capture, notification fanout and escalation)
+**Version:** 0.5 — Phase 0 (authentication) + Phase 1 steps 1-4 (SOS button, alert record, GPS capture, notification fanout and escalation, family link invitations)
 **Base URL (development):** `http://localhost:5000`
 
 This document is the agreement between the backend and the mobile app. Every endpoint the app is allowed to call is listed here. If you add an endpoint, add it to this file in the same Pull Request. If you need an endpoint that does not exist yet, raise it in the group rather than working around it.
 
-The authentication endpoints, the emergency alert endpoints, GPS capture, and notification fanout exist today. Geofencing and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
+The authentication endpoints, the emergency alert endpoints, GPS capture, notification fanout and broadcast, family link invitations, and emergency contact management exist today. Geofencing and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
 
 ---
 
@@ -142,6 +142,16 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `GET` | `/emergency/disaster-alerts` | Bearer | List active disaster alerts & weather warnings |
 | `GET` | `/emergency/disaster-alerts/:id` | Bearer | Get details for a specific disaster alert |
 | `POST` | `/emergency/alerts/fall` | Bearer | Trigger manual fall emergency alert |
+| `POST` | `/family/invites` | Bearer | Invite a registered person as family — self, or an owner-level family member |
+| `POST` | `/family/invites/:id/accept` | Bearer | Invitee accepts — activates the link only, nothing else |
+| `POST` | `/family/invites/:id/decline` | Bearer | Invitee declines |
+| `POST` | `/family/links/:id/revoke` | Bearer | Pull an active link — elderly user, the family member themselves, or an owner-level family member |
+| `GET` | `/family/links` | Bearer | The caller's own links, either side, optionally filtered by status |
+| `POST` | `/family/links/:id/emergency-contact` | Bearer | Deliberately promote a linked family member to emergency-contact status |
+| `POST` | `/emergency/contacts` | Bearer | Add a hand-entered emergency contact |
+| `GET` | `/emergency/contacts` | Bearer | The elderly user's contact list, priority order |
+| `PATCH` | `/emergency/contacts/:id` | Bearer | Edit a contact, including reordering via `priority` |
+| `DELETE` | `/emergency/contacts/:id` | Bearer | Soft-delete a contact |
 
 ---
 
@@ -812,6 +822,14 @@ A contact reachable on more than one channel is notified on all of them at once,
 
 **No new column tracks escalation progress.** "Who was notified, and when" is derived from the `notifications` table joined to `emergency_contacts.priority`, not stored on `alerts`. Since escalation only ever moves forward, the most recently created `notifications` row for an alert always belongs to its current-stage contact.
 
+### Family broadcast tier — separate from the escalation above
+
+**SOS only.** `POST /emergency/alerts` also fires a second, independent notification path: every family member with an **active** `family_links` row to the elderly user gets pushed once, immediately, to every registered device — not phoned, not escalated, not retried on a schedule. This is a different opt-in than `emergency_contacts`: linking a dashboard means "I can see this account," not "call me," but a linked family member should still learn the moment SOS fires rather than finding out from the fanout tier's audit trail after the fact.
+
+**No deduplication with the escalation tier.** A person who is both an active family member and an emergency contact gets two separate `notifications` rows for the same alert — one `channel: 'push'` with `emergencyContactId: null` (broadcast), one however the fanout tier reaches them (`emergencyContactId` set). Deliberate: a duplicate push is a minor annoyance, a missed one is dangerous.
+
+**Runs once, at creation, for SOS alerts only.** Not re-run by the escalation scheduler, and not triggered by `POST /emergency/alerts/fall` — extending it to other alert types is future work.
+
 ---
 
 ---
@@ -1045,6 +1063,272 @@ Triggers a manual fall alert (`alert_type: 'fall'`) for the authenticated user. 
 
 ---
 
+## Family Links (Phase 1 step 4)
+
+`family_links` controls dashboard access — who can see and manage whose data. It is deliberately separate from `emergency_contacts` — who gets called during SOS — and **stays** separate: accepting an invite only activates dashboard access, nothing more. Promoting a linked family member to emergency-contact status is a distinct, deliberate action — `POST /family/links/:id/emergency-contact`, documented at the end of this section — never a side effect of accepting.
+
+A link moves through at most: `pending` → `active` → `revoked`, or `pending` → `revoked` if declined. **`revoked` is reused for "declined" — there is no separate `declined` status.** A declined invite and a pulled-access link look identical in the API; both can be re-invited the same way.
+
+### `POST /family/invites`
+
+Invites a **registered** person as family. Either the elderly user invites for their own account, or an existing `owner`-level family member invites on that elderly person's behalf (`'view'`/`'manage'` cannot). The invitee is looked up by phone — **they must already have an account**; see "Known limitations" below.
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `phone` | string | **yes** | The invitee's phone — any accepted format, see [Phone number format](#phone-number-format). Must belong to an existing account |
+| `elderlyUserId` | string (UUID) | required only if the caller is not the elderly user | Ignored/implied when the caller's own role is `elderly` |
+| `relationship` | string | no | Free text, e.g. `"daughter"`, 50 characters or fewer |
+| `permissionLevel` | string | no | `view` (default), `manage`, or `owner` |
+| `canViewLocation` | boolean | no | Default `true` |
+| `canManageContacts` | boolean | no | Default `false` |
+| `canManageCaregivers` | boolean | no | Default `false`. Accepted and stored, but **nothing checks it yet** — no caregiver-management endpoints exist for it to gate. Left in place intentionally, not dead code left over by mistake |
+| `canAcknowledgeAlerts` | boolean | no | Default `true` |
+
+```json
+{ "phone": "+919876543211", "relationship": "daughter", "permissionLevel": "owner" }
+```
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "link": {
+    "id": "3e31d6e8-a28a-4497-a3af-6b3f47e79523",
+    "elderlyUserId": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+    "familyUserId": "b0d5f3ab-6718-4410-8784-1f16ad26dbec",
+    "relationship": "daughter",
+    "permissionLevel": "owner",
+    "canViewLocation": true,
+    "canManageContacts": false,
+    "canManageCaregivers": false,
+    "canAcknowledgeAlerts": true,
+    "status": "pending",
+    "invitedBy": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+    "approvedAt": null,
+    "revokedAt": null,
+    "createdAt": "2026-08-28T04:29:54.468Z",
+    "updatedAt": "2026-08-28T04:29:54.468Z"
+  }
+}
+```
+
+**Re-inviting a previously declined or revoked pair reuses the same row** — `(elderlyUserId, familyUserId)` is unique, so this updates that row back to `pending` rather than creating a second one. The returned `id` is the same as the original invite's.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | A field is missing/malformed, `elderlyUserId` missing for a non-elderly caller, or the phone belongs to the elderly user themselves |
+| `403` | `not_permitted` | Caller is family but not an `owner`-level, `active` link to that elderly user |
+| `404` | `invitee_not_registered` | No account exists for that phone number — see "Known limitations" |
+| `409` | `already_linked` | This pair already has an `active` link |
+| `409` | `invite_already_pending` | This pair already has a `pending` invite |
+
+---
+
+### `POST /family/invites/:id/accept`
+
+Only the invitee (`family_user_id`) may call this. Activates the link — **nothing else**. It does not add the invitee as an emergency contact; that's `POST /family/links/:id/emergency-contact`, a separate action a permitted caller takes deliberately afterward, documented at the end of this section.
+
+**Response `200`** — the link, now `status: "active"`, `approvedAt` set.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `403` | `not_invitee` | Caller is not the person this invite was sent to |
+| `404` | `invite_not_found` | No invite with that id |
+| `409` | `invite_not_pending` | Already accepted, declined, or revoked |
+
+---
+
+### `POST /family/invites/:id/decline`
+
+Only the invitee may call this. Sets `status: "revoked"` — see the note at the top of this section on why decline reuses that value rather than a dedicated one. Does not touch `emergency_contacts` — a declined invite never created a contact row to begin with.
+
+**Response `200`** — the link, now `status: "revoked"`, `revokedAt` set.
+
+**Errors:** same shape as accept — `403 not_invitee`, `404 invite_not_found`, `409 invite_not_pending`.
+
+---
+
+### `POST /family/links/:id/revoke`
+
+Pulls an **active** link. Permitted callers: the elderly user, the family member themselves (leaving), or another `owner`-level family member active on that same elderly account.
+
+**Also deactivates the matching `emergency_contacts` row, if `POST /family/links/:id/emergency-contact` was ever used on this link.** A no-op otherwise — most links never reach that state. Deliberate default when it applies: leaving a phone-escalation path open to someone whose dashboard access was just pulled for cause is the wrong one for an emergency product. It does not touch any other contact — only the row created by this specific link (`emergency_contacts.contact_user_id = this family member's user id`, for this elderly user).
+
+**Response `200`** — the link, now `status: "revoked"`, `revokedAt` set.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `403` | `not_permitted` | Caller is none of: the elderly user, this family member, or an owner-level active family member for this elderly user |
+| `404` | `link_not_found` | No link with that id |
+| `409` | `link_not_active` | Link is `pending` or already `revoked` |
+
+---
+
+### `GET /family/links`
+
+The caller's own links, from whichever side they're on: an elderly caller sees who has (or is pending) access to their account; a family caller sees which elderly accounts they're linked to, including invites still awaiting their own response.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `status` | no | `pending`, `active`, or `revoked`. Omit for every status |
+
+**Response `200`**
+
+```json
+{ "status": "ok", "count": 1, "links": [ { "...": "one link, same shape as above" } ] }
+```
+
+---
+
+### `POST /family/links/:id/emergency-contact`
+
+The deliberate action that promotes an **active** link to emergency-contact status. Separate from accepting the invite on purpose — dashboard access and being phoned during SOS are different permissions (see the intro to this section), so making the second one true has to be its own choice.
+
+Copies `full_name`/`phone`/`email` from the family member's account **at that moment**, sets `contact_user_id` to their user id, and appends after any existing contacts by priority. All three `notify_by_*` flags default `true`.
+
+**This is a one-time copy, not a live reference.** If that family member later changes their phone or email, this row does not update — see "Known limitations" below. `contactUserId` being non-null is the only signal the contacts list has that a given row's details came from a linked account rather than being entered by hand; no separate flag exists for this.
+
+Permitted: the elderly user, or a family member with `can_manage_contacts = true` on an active link to that elderly user (not necessarily *this* link).
+
+**Request body:** none.
+
+**Response `201`** — the new contact, same shape as `POST /emergency/contacts` below.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `403` | `not_permitted` | Caller lacks `can_manage_contacts` on an active link to this elderly user |
+| `404` | `link_not_found` | No link with that id |
+| `409` | `link_not_active` | Link is `pending` or `revoked` |
+| `409` | `contact_already_exists` | This family member's current phone number is already a contact for this elderly user |
+
+---
+
+## Emergency Contacts (Phase 1 step 4)
+
+Hand-entered contact CRUD — the escalate-a-linked-account action above is the only other way a row reaches this table. `contact_user_id` is always `null` here: a neighbour or doctor with no account is the normal case.
+
+Permitted on every endpoint below: the owning elderly user, or a family member with an active `family_links` row to them and `can_manage_contacts = true`.
+
+### `POST /emergency/contacts`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `fullName` | string | **yes** | 1–120 characters |
+| `phone` | string | **yes** | Any accepted format, see [Phone number format](#phone-number-format) |
+| `elderlyUserId` | string (UUID) | required only if the caller is not the elderly user | Whose contact list this is |
+| `email` | string | no | Valid address, 255 characters or fewer |
+| `relationship` | string | no | Free text, e.g. `"neighbour"`, 50 characters or fewer |
+| `priority` | integer | no | 1–10. Omit to append after the current highest priority |
+| `notifyBySms` | boolean | no | Default `true` |
+| `notifyByCall` | boolean | no | Default `true` |
+| `notifyByPush` | boolean | no | Default `true` — has no effect without a linked account, since there's no `contact_user_id` to find a device token for |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "contact": {
+    "id": "958d6991-a0de-4fe7-98e5-13d8c25d71ce",
+    "userId": "7521db3a-3527-4201-a489-164f4fa39bb5",
+    "contactUserId": null,
+    "fullName": "Neighbour Norm",
+    "phone": "+919812345000",
+    "email": null,
+    "relationship": "neighbour",
+    "priority": 2,
+    "notifyBySms": true,
+    "notifyByCall": true,
+    "notifyByPush": true,
+    "isActive": true,
+    "createdAt": "2026-08-28T04:44:48.200Z",
+    "updatedAt": "2026-08-28T04:44:48.200Z"
+  }
+}
+```
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | A field is missing/malformed, or `elderlyUserId` missing for a non-elderly caller |
+| `403` | `not_permitted` | Caller lacks `can_manage_contacts` for this elderly user |
+| `409` | `contact_already_exists` | This elderly user already has a contact with this phone number |
+
+---
+
+### `GET /emergency/contacts`
+
+The owning elderly user's contact list, active contacts only, in priority order.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `elderlyUserId` | required only if the caller is not the elderly user | |
+
+**Response `200`**
+
+```json
+{ "status": "ok", "count": 1, "contacts": [ { "...": "one contact, same shape as above" } ] }
+```
+
+**Errors:** `400 validation_failed` (missing `elderlyUserId` for a non-elderly caller), `403 not_permitted`.
+
+---
+
+### `PATCH /emergency/contacts/:id`
+
+Any of `POST`'s content fields, including `priority` on its own — **there is no separate reorder endpoint.** At least one field is required.
+
+**Response `200`** — the updated contact.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | No fields sent, or a sent field is malformed |
+| `403` | `not_permitted` | Caller lacks `can_manage_contacts` for this contact's elderly user |
+| `404` | `contact_not_found` | No such contact, or it has been deleted |
+| `409` | `contact_already_exists` | The new phone number collides with another contact for the same elderly user |
+
+---
+
+### `DELETE /emergency/contacts/:id`
+
+**Soft delete** — sets `isActive: false`. Never a hard delete: `notifications.emergency_contact_id` references this table, and past notification history needs a real row to point back at. **There is no undelete through this API** — re-adding the same phone number collides with the still-present deleted row.
+
+**Response `200`** — the contact, now `isActive: false`.
+
+**Errors:** `403 not_permitted`, `404 contact_not_found` (including a contact already deleted).
+
+---
+
+## Known limitations
+
+**Pre-registration invites do not work.** `POST /family/invites` can only invite someone who has already registered an account — the invitee is looked up by phone, and an unregistered number returns `404 invitee_not_registered`. For real users this is the common case, not an edge case: a daughter installs the app for her mother, then wants to invite a brother who has nothing installed yet. Today he has to register first, then be invited. Building pre-registration invites (an invite record keyed on a phone number rather than a user id, resolved and turned into a real `family_links` row the moment that phone number registers) is a real feature, not a quick fix — it needs its own table or a nullable `family_user_id`, a way to notify the inviter once the invite resolves, and a decision on how long an unclaimed invite stays valid. Not attempted here.
+
+**The emergency-contact copy goes stale silently.** `POST /family/links/:id/emergency-contact` copies `fullName`/`phone`/`email` once, at that moment, and never refreshes them. If that family member later changes their phone number, the elderly user's emergency contact list keeps calling the old one — and nobody finds out until an actual emergency exposes it. This is a safety failure mode, not untidy data. **Wherever a contacts list is displayed, it should surface that a `contactUserId`-linked row's details came from a linked account and may be out of date** — `contactUserId !== null` is the signal to key that off of. Keeping the copy fresh (a trigger on `users`, or resolving `contact_user_id` at read time instead of copying) is future work, not attempted here.
+
+**Deleted contacts cannot be undeleted through the API.** `DELETE /emergency/contacts/:id` is soft (`isActive: false`), but nothing PATCHes `isActive` back to `true` — re-adding the same phone number hits `uq_contact_per_user` and fails as `contact_already_exists`. Only direct database access can revive the original row today.
+
+---
+
 ## Not yet built
 
 Everything below is planned but does not exist. Do not code against it — it will be specified here first.
@@ -1055,9 +1339,10 @@ Everything below is planned but does not exist. Do not code against it — it wi
 | Geofences, breach detection, live location over WebSockets | 3 | Sree |
 | Care plans, activity reports, tasks, reviews | 4 | [Teammate B] |
 | Ambulance booking, disaster alerts, response centre, fall trigger | 5 | [Teammate C] |
-| Family links — invitations, approval, permissions | 1 | Sree |
-| Emergency contacts management (add/edit/remove/reorder) | 1 | Sree |
+| Pre-registration invites (invite someone with no account yet) | 1 | Sree |
+| Keeping the emergency-contact copy fresh after a linked account changes | 1 | Sree |
+| Undeleting a soft-deleted emergency contact | 1 | Sree |
 
-**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above.
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above. `POST /family/invites`, `POST /family/invites/:id/accept`, `POST /family/invites/:id/decline`, `POST /family/links/:id/revoke`, `GET /family/links`, `POST /family/links/:id/emergency-contact` — see "Family Links" above. `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id` — see "Emergency Contacts" above. The family broadcast push tier — see "Notification channels and escalation" above.
 
 `family_links` and `emergency_contacts` rows both must still be created directly (no management endpoints for either yet) — same situation, same reason: nothing in this step needed one, so nothing was built ahead of being asked for. See `backend/scripts/seed-test-users.js` for how development data gets in either table today.

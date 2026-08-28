@@ -31,7 +31,9 @@ const PROVIDERS = {
   voice_call: voiceProvider,
 };
 
-async function getAlertWithOwnerName(alertId) {
+// Exported for reuse by broadcast.js — the family-wide push tier needs the
+// same alert-plus-elderly-name shape this one already builds.
+export async function getAlertWithOwnerName(alertId) {
   const { rows } = await query(
     `SELECT a.*, u.full_name AS elderly_full_name
        FROM alerts a

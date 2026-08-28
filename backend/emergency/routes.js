@@ -38,8 +38,19 @@ import {
 import { createLocation, toPublicLocation } from './locations.js';
 import { registerDeviceToken } from './deviceTokens.js';
 import { advanceFanout } from './notifications/fanout.js';
+import { broadcastToFamily } from './notifications/broadcast.js';
 import { ambulanceRouter } from './ambulance/routes.js';
 import { disasterRouter } from './disaster/routes.js';
+import {
+  toPublicContact,
+  findContactById,
+  listContactsForUser,
+  createContact,
+  updateContact,
+  deactivateContact,
+  nextContactPriority,
+} from './contacts.js';
+import { hasManageContactsPermission } from '../family/links.js';
 import {
   validateListQuery,
   validateCloseAlertBody,
@@ -48,9 +59,14 @@ import {
   validateAttachLocationBody,
   validateCreateLocationBody,
   validateRegisterDeviceTokenBody,
+  validateCreateContactBody,
+  validateContactsListQuery,
+  validateUpdateContactBody,
 } from './validate.js';
 
 export const emergencyRouter = Router();
+
+const PG_UNIQUE_VIOLATION = '23505';
 
 emergencyRouter.use('/ambulance', ambulanceRouter);
 emergencyRouter.use('/disaster-alerts', disasterRouter);
@@ -61,6 +77,16 @@ function requireAlertId(req) {
   const { id } = req.params;
   if (!UUID_RE.test(id)) {
     throw badRequest('validation_failed', 'Alert id is not a valid identifier.', {
+      details: [{ field: 'id', message: 'Must be a UUID.' }],
+    });
+  }
+  return id;
+}
+
+function requireContactId(req) {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) {
+    throw badRequest('validation_failed', 'Contact id is not a valid identifier.', {
       details: [{ field: 'id', message: 'Must be a UUID.' }],
     });
   }
@@ -94,6 +120,15 @@ emergencyRouter.post('/alerts', requireAuth, async (req, res) => {
   // is not a reason to fail the alert that already exists.
   advanceFanout(alert.id).catch((err) =>
     console.error(`Initial fanout failed for alert ${alert.id}:`, err)
+  );
+
+  // Separate tier, separate call, own catch — not inside advanceFanout and not
+  // re-run by the escalation scheduler. Every actively-linked family member
+  // gets pushed once, right now: dashboard access is a different opt-in than
+  // being phoned, but silence when SOS fires is the dangerous failure mode,
+  // not an extra push. SOS only for now — see BUILD_LOG.md.
+  broadcastToFamily(alert.id).catch((err) =>
+    console.error(`Family broadcast failed for alert ${alert.id}:`, err)
   );
 
   res.status(201).json({ status: 'ok', alert: toPublicAlert(alert) });
@@ -317,4 +352,103 @@ emergencyRouter.post('/device-tokens', requireAuth, async (req, res) => {
   const deviceToken = validateRegisterDeviceTokenBody(req.body);
   const row = await registerDeviceToken(req.user.id, deviceToken);
   res.status(201).json({ status: 'ok', deviceToken: row });
+});
+
+// ---------------------------------------------------------------------------
+// Emergency contacts — hand-entered contact list.
+//
+// Permitted throughout: the owning elderly user, or a family member with an
+// active family_links row to them and can_manage_contacts = true (see
+// hasManageContactsPermission, family/links.js). contact_user_id is always
+// null for a contact created here — a neighbour or doctor with no account is
+// the normal case. Escalating a linked family member to contact status is a
+// separate, deliberate action: POST /family/links/:id/emergency-contact
+// (family/routes.js), not this endpoint.
+// ---------------------------------------------------------------------------
+
+async function requireContactManagePermission(req, elderlyUserId) {
+  const permitted = await hasManageContactsPermission(req.user.id, elderlyUserId);
+  if (!permitted) {
+    throw forbidden('not_permitted', 'You are not permitted to manage contacts for this account.');
+  }
+}
+
+function requireElderlyUserId(req, elderlyUserId) {
+  if (req.user.role !== 'elderly' && !elderlyUserId) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', {
+      details: [{ field: 'elderlyUserId', message: 'Required when the caller is not the elderly user themselves.' }],
+    });
+  }
+}
+
+emergencyRouter.post('/contacts', requireAuth, async (req, res) => {
+  const input = validateCreateContactBody(req.body);
+
+  requireElderlyUserId(req, input.elderlyUserId);
+  const userId = req.user.role === 'elderly' ? req.user.id : input.elderlyUserId;
+
+  await requireContactManagePermission(req, userId);
+
+  const priority = input.priority ?? (await nextContactPriority(userId));
+
+  let contact;
+  try {
+    contact = await createContact({ userId, ...input, priority });
+  } catch (err) {
+    // Relying on the constraint as the real backstop, same reasoning as
+    // /auth/register: two simultaneous creates for the same phone would both
+    // pass a pre-check and one must still fail here.
+    if (err.code === PG_UNIQUE_VIOLATION) {
+      throw conflict('contact_already_exists', 'A contact with this phone number already exists for this account.');
+    }
+    throw err;
+  }
+
+  res.status(201).json({ status: 'ok', contact: toPublicContact(contact) });
+});
+
+emergencyRouter.get('/contacts', requireAuth, async (req, res) => {
+  const { elderlyUserId } = validateContactsListQuery(req.query);
+
+  requireElderlyUserId(req, elderlyUserId);
+  const userId = req.user.role === 'elderly' ? req.user.id : elderlyUserId;
+
+  await requireContactManagePermission(req, userId);
+
+  const contacts = await listContactsForUser(userId);
+  res.json({ status: 'ok', count: contacts.length, contacts: contacts.map(toPublicContact) });
+});
+
+emergencyRouter.patch('/contacts/:id', requireAuth, async (req, res) => {
+  const id = requireContactId(req);
+  const patch = validateUpdateContactBody(req.body);
+
+  const existing = await findContactById(id);
+  if (!existing || !existing.is_active) throw notFound('contact_not_found', 'No contact with that id.');
+
+  await requireContactManagePermission(req, existing.user_id);
+
+  let updated;
+  try {
+    updated = await updateContact(id, patch);
+  } catch (err) {
+    if (err.code === PG_UNIQUE_VIOLATION) {
+      throw conflict('contact_already_exists', 'A contact with this phone number already exists for this account.');
+    }
+    throw err;
+  }
+
+  res.json({ status: 'ok', contact: toPublicContact(updated) });
+});
+
+emergencyRouter.delete('/contacts/:id', requireAuth, async (req, res) => {
+  const id = requireContactId(req);
+
+  const existing = await findContactById(id);
+  if (!existing || !existing.is_active) throw notFound('contact_not_found', 'No contact with that id.');
+
+  await requireContactManagePermission(req, existing.user_id);
+
+  const updated = await deactivateContact(id);
+  res.json({ status: 'ok', contact: toPublicContact(updated) });
 });

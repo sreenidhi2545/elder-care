@@ -39,16 +39,18 @@ const TEST_USERS = [
   { phone: '9000000004', fullName: 'Test Admin', role: 'admin' },
 ];
 
-// There is no invite/approve flow yet (see API.md, "Not yet built") — a
-// family_links row can only be created directly. Without one, the family
-// test account has nobody linked and the family dashboard has nothing to
-// show, which makes it untestable. All permissions true and status 'active'
-// so the seeded family account can exercise every gated action immediately.
+// POST /family/invites now exists, but going through invite-then-accept here
+// would just be two more upsert-shaped round trips for the same deterministic
+// result this script already produces directly. Written straight to 'active'
+// so the seeded family account can exercise every gated action immediately,
+// with no invite left pending for someone to accept by hand first.
 const TEST_FAMILY_LINK = { elderlyPhone: '9000000001', familyPhone: '9000000002' };
 
-// Same situation as family_links — no endpoint creates emergency_contacts yet
-// (Phase 1 step 3 built the notification pipeline that reads this table, not
-// a way to manage it from the app). Two contacts, deliberately different:
+// Accepting a family invite now auto-creates one of these (see
+// backend/family/contactSync.js), but there is still no endpoint to manage
+// emergency_contacts by hand — add/edit/remove/reorder remains unbuilt (see
+// API.md, "Not yet built"), so seeding still writes the row directly. Two
+// contacts, deliberately different:
 // #1 is also the seeded family account, so fanout has a real contact_user_id
 // to find a device token for once one is registered — the only way to
 // exercise the push channel without a third real phone. #2 has no

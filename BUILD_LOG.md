@@ -994,3 +994,55 @@ The one true residual gap — no cached position exists at all *and* nothing res
 ### Not yet run
 
 **No code has been changed.** This entry documents the proposed change and its reasoning, put here before implementation per the same "evidence and reasoning before claiming done" discipline as every other entry in this log. Once `captureLocation.js` is edited, this needs: a preview build, an outdoor SOS test comparing `location_accuracy_meters` against the current 100.00 baseline and confirming the position lands correctly on the map, an indoor SOS test confirming the last-known-floor and async-attach behavior described above, and a rough measurement of how long real `High`-accuracy fixes actually take on this device outdoors — to confirm or correct the proposed 45s ceiling rather than leaving it as an untested guess.
+
+---
+## 2026-08-28 — Phase 1 step 4: family links, emergency contacts, and the family broadcast push tier, backend only
+
+**Correction to how this entry originally read.** The first version of this entry, and the code it described, had accepting a family invite automatically create an `emergency_contacts` row for the invitee. That was wrong and has been reverted before ever being committed — dashboard access (`family_links`) and being phoned during a crisis (`emergency_contacts`) are different permissions on purpose (see the `family_links` comment in `schema.sql`), and collapsing them into one action on accept contradicted that. Promoting a link to contact status is now its own deliberate endpoint (piece 3, below), never a side effect of accepting. Flagging the correction here rather than pretending the first version never happened.
+
+**Four pieces, this entry covers all of them:**
+
+- **1a** — `POST /family/invites`: create/reissue an invite. Unchanged from the original version of this entry.
+- **1b** — `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id`: hand-entered emergency contact CRUD. New in this revision — `backend/emergency/contacts.js` (data access) plus additions to `backend/emergency/validate.js` and `backend/emergency/routes.js`.
+- **2** — the family broadcast push tier: every actively-linked family member gets pushed once when an SOS fires, independent of the `emergency_contacts` escalation fanout. New module `backend/emergency/notifications/broadcast.js`, called fire-and-forget from `POST /emergency/alerts` alongside `advanceFanout`, own `.catch()`.
+- **3** — `POST /family/links/:id/emergency-contact`: the deliberate, explicit action that promotes an active link to contact status. Lives in `backend/family/routes.js`, since it operates on a link by id.
+
+Piece 1a's accept/decline/revoke endpoints and `GET /family/links` are otherwise unchanged from before, except: accept no longer touches `emergency_contacts` at all (see the correction above), and revoke's contact-deactivation cleanup — always built as described in the previous version of this entry — now has something to actually clean up once piece 3 has been used, rather than being permanently dead code as it was in the reverted version.
+
+### Decision: piece 3 is a link-scoped action, not a general "add this user as a contact" endpoint
+
+`POST /family/links/:id/emergency-contact` takes no body — it reads everything it needs (`full_name`/`phone`/`email`, `relationship`) off the link and the linked user's account. This keeps the permission check simple and exact: `hasManageContactsPermission(actor, link.elderly_user_id)`, the same helper `/emergency/contacts` uses, now in `family/links.js` since both modules need it. It returns `true` for the elderly user themselves without a row to check, and otherwise requires an `active` `family_links` row with `can_manage_contacts = true` — not necessarily the row named in the URL; an owner-permission family member can escalate someone else's link, same as they can send invites on the elderly person's behalf.
+
+### Decision: friendly pre-check in piece 3, constraint-only in piece 1b
+
+Piece 3's spec explicitly asked for an app-level pre-check ahead of `uq_contact_per_user`, for a better error than a raw constraint violation — `findContactByPhone` runs first, and a match throws `409 contact_already_exists` with the existing contact attached. The `uq_contact_per_user` catch stays underneath it as the real backstop, since the pre-check is a query-then-insert and a concurrent request could still race past it — the comment at the point of use says so.
+
+Piece 1b's `POST /emergency/contacts` does **not** pre-check; it relies on catching the constraint violation, same as `/auth/register` already does for duplicate phone numbers ("relying on the unique constraint rather than a pre-check: two simultaneous registrations would both pass a pre-check and one would still fail here"). No spec asked for a friendlier message on this path, and the existing codebase convention for exactly this shape of problem is catch-the-constraint, not pre-check — so that's what it does.
+
+### Decision: the broadcast tier does not deduplicate against the escalation tier
+
+Confirmed live: a family member who is both actively linked and (via piece 3) an emergency contact gets two `notifications` rows for the same alert — one `channel: 'push', emergency_contact_id: NULL` from the broadcast tier, one from the fanout tier with `emergency_contact_id` set to their contact row. This was a explicit call, not an oversight: a duplicate push is a minor annoyance, a missed one during a real emergency is not an acceptable trade to avoid it.
+
+### Decision: soft delete has no undelete path
+
+`DELETE /emergency/contacts/:id` sets `is_active = FALSE` rather than removing the row — `notifications.emergency_contact_id` needs something real to point back at. Nothing PATCHes `is_active` back to `true`, and it isn't in the set of fields `validateUpdateContactBody` accepts, so re-adding a deleted contact's phone number collides with `uq_contact_per_user` and fails as `contact_already_exists`. Recorded as a known limitation rather than solved here — an undelete would need either a PATCH-able `is_active` (with its own permission story) or a dedicated endpoint, neither built in this pass.
+
+### Known limitations, carried over and one new one
+
+**Pre-registration invites still do not work** — unchanged from the original version of this entry, see API.md.
+
+**The emergency-contact copy still goes stale silently** — same underlying issue as before, now attached to piece 3 (`POST /family/links/:id/emergency-contact`) instead of accept, since that's the action that actually performs the copy now. `contactUserId !== null` remains the only signal a future contacts screen has that a row is linked-account-derived; nothing here builds that screen.
+
+**Soft-deleted contacts cannot be undeleted through the API** — new in this revision, see above.
+
+### Not yet run
+
+**Backend only, by design** — no screens were built. Every decision above was exercised live against a running server and a live PostgreSQL database, not just reasoned from source, using disposable synthetic accounts since discarded:
+
+- Accept confirmed to create **no** `emergency_contacts` row (regression check on the corrected behavior).
+- Piece 3: permission denial for a `view`-level family member without `can_manage_contacts`; successful escalation by an `owner`/`can_manage_contacts` family member, with `contactUserId`/`phone`/notify-defaults all confirmed on the returned row; escalating the same link twice returns `409 contact_already_exists`.
+- Piece 2: an SOS fires against two actively-linked family members, one of whom (via piece 3) is also an emergency contact. Confirmed via direct query: the contact-and-linked family member gets exactly one broadcast-tier row (`emergency_contact_id NULL`) **and** exactly one fanout-tier row (`emergency_contact_id` set) for the same alert — the no-dedup decision confirmed working, not just described. The family-member-only account gets exactly one row, broadcast tier only.
+- Revoking the escalated link confirmed to flip that contact's `is_active` to `false`.
+- Piece 1b: permission denial for a non-permitted family member; create (self, and confirmed `contactUserId: null`); duplicate-phone conflict; list; `PATCH` with only `priority` (confirmed other fields untouched); soft delete, confirmed excluded from the subsequent list, and confirmed `404` on both `PATCH` and `DELETE` of an already-deleted contact; permission re-checked and confirmed denied after the underlying link was revoked.
+
+Not yet exercised: anything from the mobile app itself — every check above was a direct HTTP call, not a request from an actual device or the Expo client. Also not exercised live: `PATCH /emergency/contacts/:id` changing `phone` or `email` themselves (only `priority` was tested), and the family-member-invites-on-behalf-of-the-elderly-user path for `POST /family/invites` (only the elderly-self path has been exercised live, in this and the previous version of this entry).

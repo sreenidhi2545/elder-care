@@ -6,6 +6,7 @@
 // ============================================================================
 
 import { badRequest } from '../shared/http/errors.js';
+import { normalizePhone } from '../shared/phone.js';
 
 const ALERT_STATUSES = ['active', 'acknowledged', 'resolved', 'cancelled', 'false_alarm'];
 
@@ -217,6 +218,137 @@ export function validateRegisterDeviceTokenBody(body = {}) {
     appVersion: appVersion ?? null,
     osVersion: osVersion ?? null,
   };
+}
+
+const CONTACT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * POST /emergency/contacts. `elderlyUserId` is required only when the caller
+ * is not the elderly user themselves — routes.js decides that, same pattern
+ * as family/validate.js's invite body. `priority` left `null` when omitted
+ * means "append after the current max"; routes.js resolves that, not here.
+ */
+export function validateCreateContactBody(body = {}) {
+  const {
+    elderlyUserId, fullName, phone, email, relationship, priority,
+    notifyBySms, notifyByCall, notifyByPush,
+  } = body;
+
+  const normalizedPhone = normalizePhone(phone);
+  const hasEmail = typeof email === 'string' && email.trim() !== '';
+
+  const errors = fieldErrors([
+    { when: elderlyUserId !== undefined && !CONTACT_UUID_RE.test(elderlyUserId),
+      field: 'elderlyUserId', message: 'elderlyUserId must be a UUID.' },
+    { when: typeof fullName !== 'string' || fullName.trim().length < 1 || fullName.trim().length > 120,
+      field: 'fullName', message: 'Full name is required, 1-120 characters.' },
+    { when: !normalizedPhone.ok, field: 'phone', message: normalizedPhone.reason },
+    { when: email !== undefined && email !== null && typeof email !== 'string',
+      field: 'email', message: 'Email must be a string.' },
+    { when: hasEmail && !EMAIL_RE.test(email.trim()), field: 'email', message: 'Email is not a valid address.' },
+    { when: hasEmail && email.trim().length > 255, field: 'email', message: 'Email must be 255 characters or fewer.' },
+    { when: relationship !== undefined && (typeof relationship !== 'string' || relationship.length > 50),
+      field: 'relationship', message: 'Relationship must be a string of 50 characters or fewer.' },
+    { when: priority !== undefined && (!Number.isInteger(priority) || priority < 1 || priority > 10),
+      field: 'priority', message: 'Priority must be a whole number between 1 and 10.' },
+    { when: notifyBySms !== undefined && typeof notifyBySms !== 'boolean',
+      field: 'notifyBySms', message: 'notifyBySms must be a boolean.' },
+    { when: notifyByCall !== undefined && typeof notifyByCall !== 'boolean',
+      field: 'notifyByCall', message: 'notifyByCall must be a boolean.' },
+    { when: notifyByPush !== undefined && typeof notifyByPush !== 'boolean',
+      field: 'notifyByPush', message: 'notifyByPush must be a boolean.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return {
+    elderlyUserId: elderlyUserId ?? null,
+    fullName: fullName.trim(),
+    phone: normalizedPhone.value,
+    email: hasEmail ? email.trim().toLowerCase() : null,
+    relationship: typeof relationship === 'string' && relationship.trim() !== '' ? relationship.trim() : null,
+    priority: priority ?? null,
+    notifyBySms: notifyBySms ?? true,
+    notifyByCall: notifyByCall ?? true,
+    notifyByPush: notifyByPush ?? true,
+  };
+}
+
+/**
+ * GET /emergency/contacts — elderlyUserId is required only for a non-elderly
+ * caller; routes.js decides that.
+ */
+export function validateContactsListQuery(query = {}) {
+  const { elderlyUserId } = query;
+
+  const errors = fieldErrors([
+    { when: elderlyUserId !== undefined && !CONTACT_UUID_RE.test(elderlyUserId),
+      field: 'elderlyUserId', message: 'elderlyUserId must be a UUID.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return { elderlyUserId: elderlyUserId ?? null };
+}
+
+/**
+ * PATCH /emergency/contacts/:id — every field optional, but at least one must
+ * be present. No separate reorder endpoint: sending only `priority` is how
+ * reordering works.
+ */
+export function validateUpdateContactBody(body = {}) {
+  const { fullName, phone, email, relationship, priority, notifyBySms, notifyByCall, notifyByPush } = body;
+
+  const providedPhone = phone !== undefined;
+  const normalizedPhone = providedPhone ? normalizePhone(phone) : null;
+  const hasEmail = typeof email === 'string' && email.trim() !== '';
+
+  const anyFieldProvided = [fullName, phone, email, relationship, priority, notifyBySms, notifyByCall, notifyByPush]
+    .some((v) => v !== undefined);
+
+  const errors = fieldErrors([
+    { when: !anyFieldProvided, field: 'body', message: 'At least one field must be provided.' },
+    { when: fullName !== undefined && (typeof fullName !== 'string' || fullName.trim().length < 1 || fullName.trim().length > 120),
+      field: 'fullName', message: 'Full name must be 1-120 characters.' },
+    { when: providedPhone && !normalizedPhone.ok, field: 'phone', message: normalizedPhone?.reason },
+    { when: email !== undefined && email !== null && typeof email !== 'string',
+      field: 'email', message: 'Email must be a string.' },
+    { when: hasEmail && !EMAIL_RE.test(email.trim()), field: 'email', message: 'Email is not a valid address.' },
+    { when: hasEmail && email.trim().length > 255, field: 'email', message: 'Email must be 255 characters or fewer.' },
+    { when: relationship !== undefined && relationship !== null &&
+        (typeof relationship !== 'string' || relationship.length > 50),
+      field: 'relationship', message: 'Relationship must be a string of 50 characters or fewer.' },
+    { when: priority !== undefined && (!Number.isInteger(priority) || priority < 1 || priority > 10),
+      field: 'priority', message: 'Priority must be a whole number between 1 and 10.' },
+    { when: notifyBySms !== undefined && typeof notifyBySms !== 'boolean',
+      field: 'notifyBySms', message: 'notifyBySms must be a boolean.' },
+    { when: notifyByCall !== undefined && typeof notifyByCall !== 'boolean',
+      field: 'notifyByCall', message: 'notifyByCall must be a boolean.' },
+    { when: notifyByPush !== undefined && typeof notifyByPush !== 'boolean',
+      field: 'notifyByPush', message: 'notifyByPush must be a boolean.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  const result = {};
+  if (fullName !== undefined) result.fullName = fullName.trim();
+  if (providedPhone) result.phone = normalizedPhone.value;
+  if (email !== undefined) result.email = hasEmail ? email.trim().toLowerCase() : null;
+  if (relationship !== undefined) {
+    result.relationship = typeof relationship === 'string' && relationship.trim() !== '' ? relationship.trim() : null;
+  }
+  if (priority !== undefined) result.priority = priority;
+  if (notifyBySms !== undefined) result.notifyBySms = notifyBySms;
+  if (notifyByCall !== undefined) result.notifyByCall = notifyByCall;
+  if (notifyByPush !== undefined) result.notifyByPush = notifyByPush;
+  return result;
 }
 
 /** POST /emergency/alerts/:id/cancel and /resolve share this body shape. */

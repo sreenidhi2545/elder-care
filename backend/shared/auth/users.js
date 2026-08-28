@@ -35,6 +35,13 @@ export async function findUserById(id) {
   return rows[0] ?? null;
 }
 
+/** Used by the family-link invite flow to resolve a typed phone number to an
+ * account — phone is expected already normalized (E.164) by the caller. */
+export async function findUserByPhone(phone) {
+  const { rows } = await query(`SELECT ${PUBLIC_COLUMNS} FROM users WHERE phone = $1`, [phone]);
+  return rows[0] ?? null;
+}
+
 /**
  * Fetches a user for the login check, by phone or by email. This is the one
  * place password_hash is read, and it must never reach a response body.
