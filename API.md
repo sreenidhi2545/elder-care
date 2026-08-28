@@ -1177,17 +1177,46 @@ Pulls an **active** link. Permitted callers: the elderly user, the family member
 
 The caller's own links, from whichever side they're on: an elderly caller sees who has (or is pending) access to their account; a family caller sees which elderly accounts they're linked to, including invites still awaiting their own response.
 
+**Each link is joined to the other side's current name and phone** — `relationship` is free text set once at invite time (often blank, and useless for telling two family members apart even when set), so this endpoint additionally reads the linked account's `full_name`/`phone` from `users` at request time. An elderly caller's links each carry `familyUser: { fullName, phone }`; a family caller's links each carry `elderlyUser: { fullName, phone }`. Only one of the two is ever present, matching which side the caller is on. **Read live, not copied** — unlike the one-time snapshot `POST /family/links/:id/emergency-contact` writes into `emergency_contacts`, this always reflects the account's current name, so it does not go stale the way that copy can.
+
+This join does not apply to the `link` returned by `POST /family/invites`, `.../accept`, or `.../decline` — those come straight off the row just written, with neither `familyUser` nor `elderlyUser` present. Only `GET /family/links` does the join.
+
 **Query parameters**
 
 | Field | Required | Rules |
 |---|---|---|
 | `status` | no | `pending`, `active`, or `revoked`. Omit for every status |
 
-**Response `200`**
+**Response `200`** — elderly caller:
 
 ```json
-{ "status": "ok", "count": 1, "links": [ { "...": "one link, same shape as above" } ] }
+{
+  "status": "ok",
+  "count": 1,
+  "links": [
+    {
+      "id": "3e31d6e8-a28a-4497-a3af-6b3f47e79523",
+      "elderlyUserId": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+      "familyUserId": "b0d5f3ab-6718-4410-8784-1f16ad26dbec",
+      "relationship": "daughter",
+      "permissionLevel": "owner",
+      "canViewLocation": true,
+      "canManageContacts": false,
+      "canManageCaregivers": false,
+      "canAcknowledgeAlerts": true,
+      "status": "active",
+      "invitedBy": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+      "approvedAt": "2026-08-28T04:31:02.113Z",
+      "revokedAt": null,
+      "createdAt": "2026-08-28T04:29:54.468Z",
+      "updatedAt": "2026-08-28T04:31:02.113Z",
+      "familyUser": { "fullName": "Priya Kumar", "phone": "+919876543211" }
+    }
+  ]
+}
 ```
+
+A family caller's response is the same shape with `elderlyUser: { fullName, phone }` in place of `familyUser`.
 
 ---
 

@@ -19,7 +19,7 @@
 import { query } from '../shared/db/pool.js';
 
 export function toPublicFamilyLink(row) {
-  return {
+  const link = {
     id: row.id,
     elderlyUserId: row.elderly_user_id,
     familyUserId: row.family_user_id,
@@ -40,6 +40,21 @@ export function toPublicFamilyLink(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+
+  // Only present when the row came from listLinksForElderly/listLinksForFamily
+  // below, which join `users` for exactly this — a plain family_links row (an
+  // invite just created or accepted, say) has no full_name/phone to attach and
+  // these keys are simply omitted rather than sent null. `relationship` alone
+  // cannot tell two family members apart, and is often blank; this is the
+  // caller's-eye-view name for whichever side of the link isn't them.
+  if (row.family_full_name !== undefined) {
+    link.familyUser = { fullName: row.family_full_name, phone: row.family_phone };
+  }
+  if (row.elderly_full_name !== undefined) {
+    link.elderlyUser = { fullName: row.elderly_full_name, phone: row.elderly_phone };
+  }
+
+  return link;
 }
 
 export async function findLinkById(id) {
@@ -206,21 +221,47 @@ export async function hasManageContactsPermission(actorUserId, elderlyUserId) {
   return !!link && link.can_manage_contacts === true;
 }
 
+/**
+ * Joins `users` on family_user_id so the caller — the elderly user — gets
+ * the linked family member's current name and phone, not just their id and
+ * whatever `relationship` free text was typed at invite time (often blank,
+ * and useless for telling two family members apart if it isn't). Read at
+ * request time, not copied — unlike the emergency_contacts snapshot in
+ * routes.js's .../emergency-contact, this always reflects the account's
+ * current name.
+ */
 export async function listLinksForElderly(elderlyUserId, status) {
   const { rows } = await query(
     status
-      ? `SELECT * FROM family_links WHERE elderly_user_id = $1 AND status = $2 ORDER BY created_at DESC`
-      : `SELECT * FROM family_links WHERE elderly_user_id = $1 ORDER BY created_at DESC`,
+      ? `SELECT fl.*, u.full_name AS family_full_name, u.phone AS family_phone
+           FROM family_links fl
+           JOIN users u ON u.id = fl.family_user_id
+          WHERE fl.elderly_user_id = $1 AND fl.status = $2
+          ORDER BY fl.created_at DESC`
+      : `SELECT fl.*, u.full_name AS family_full_name, u.phone AS family_phone
+           FROM family_links fl
+           JOIN users u ON u.id = fl.family_user_id
+          WHERE fl.elderly_user_id = $1
+          ORDER BY fl.created_at DESC`,
     status ? [elderlyUserId, status] : [elderlyUserId]
   );
   return rows;
 }
 
+/** Same idea as listLinksForElderly, joined the other way: the elderly account's name/phone for a family caller. */
 export async function listLinksForFamily(familyUserId, status) {
   const { rows } = await query(
     status
-      ? `SELECT * FROM family_links WHERE family_user_id = $1 AND status = $2 ORDER BY created_at DESC`
-      : `SELECT * FROM family_links WHERE family_user_id = $1 ORDER BY created_at DESC`,
+      ? `SELECT fl.*, u.full_name AS elderly_full_name, u.phone AS elderly_phone
+           FROM family_links fl
+           JOIN users u ON u.id = fl.elderly_user_id
+          WHERE fl.family_user_id = $1 AND fl.status = $2
+          ORDER BY fl.created_at DESC`
+      : `SELECT fl.*, u.full_name AS elderly_full_name, u.phone AS elderly_phone
+           FROM family_links fl
+           JOIN users u ON u.id = fl.elderly_user_id
+          WHERE fl.family_user_id = $1
+          ORDER BY fl.created_at DESC`,
     status ? [familyUserId, status] : [familyUserId]
   );
   return rows;

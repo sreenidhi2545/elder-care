@@ -458,6 +458,49 @@ export function ElderlyHomeScreen({ navigation }) {
                 </Pressable>
               </View>
 
+              {/* Family & Contacts Section */}
+              <View style={styles.actionCardsSection}>
+                <Text style={styles.sectionHeading}>Family & Contacts</Text>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.familyCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('ManageFamily')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Who Can See You"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#EDE9FE' }]}>
+                    <Text style={styles.cardIconText}>👀</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#6D28D9' }]}>Who Can See You</Text>
+                    <Text style={styles.cardSubtitle}>See who has access, and invite family</Text>
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.contactsCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('EmergencyContacts')}
+                  accessibilityRole="button"
+                  accessibilityLabel="People to Call in an Emergency"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#FFE4E6' }]}>
+                    <Text style={styles.cardIconText}>📇</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#BE123C' }]}>People to Call in an Emergency</Text>
+                    <Text style={styles.cardSubtitle}>Your emergency call list, in order</Text>
+                  </View>
+                </Pressable>
+              </View>
+
               {/* Location & Tracking Controls */}
               <View style={styles.locationSection}>
                 <Text style={styles.sectionHeading}>Location & Safety Sharing</Text>
@@ -831,6 +874,14 @@ const styles = StyleSheet.create({
   disasterCard: {
     backgroundColor: '#EFF6FF',
     borderColor: colors.primary,
+  },
+  familyCard: {
+    backgroundColor: '#F5F3FF',
+    borderColor: '#6D28D9',
+  },
+  contactsCard: {
+    backgroundColor: '#FFF1F2',
+    borderColor: '#BE123C',
   },
   cardIconBadge: {
     width: 46,
