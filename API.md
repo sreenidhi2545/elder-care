@@ -148,10 +148,15 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `POST` | `/family/links/:id/revoke` | Bearer | Pull an active link — elderly user, the family member themselves, or an owner-level family member |
 | `GET` | `/family/links` | Bearer | The caller's own links, either side, optionally filtered by status |
 | `POST` | `/family/links/:id/emergency-contact` | Bearer | Deliberately promote a linked family member to emergency-contact status |
+| `PATCH` | `/family/links/:id` | Bearer + elderly | Edit an active link's permission fields — e.g. step someone back down from `manage`/`owner` |
 | `POST` | `/emergency/contacts` | Bearer | Add a hand-entered emergency contact |
 | `GET` | `/emergency/contacts` | Bearer | The elderly user's contact list, priority order |
 | `PATCH` | `/emergency/contacts/:id` | Bearer | Edit a contact, including reordering via `priority` |
 | `DELETE` | `/emergency/contacts/:id` | Bearer | Soft-delete a contact |
+| `POST` | `/emergency/geofences` | Bearer | Define a safe (or restricted) zone |
+| `GET` | `/emergency/geofences` | Bearer | List zones for an elderly user |
+| `PATCH` | `/emergency/geofences/:id` | Bearer | Edit a zone |
+| `DELETE` | `/emergency/geofences/:id` | Bearer | Soft-delete a zone |
 
 ---
 
@@ -1245,6 +1250,39 @@ Permitted: the elderly user, or a family member with `can_manage_contacts = true
 
 ---
 
+### `PATCH /family/links/:id`
+
+Elderly user only. Edits an **active** link's permission fields without revoking it outright — the surgical undo for granting `manage`/`owner` (needed for `POST /emergency/geofences` below), stepping a family member back down without losing their dashboard access or emergency-contact status along with it.
+
+The elderly user can already see who holds which tier via `GET /family/links` (`permissionLevel`, joined with `familyUser`'s name and phone — see above); this is the other half, being able to act on what they see.
+
+**Request body** — every field optional, at least one required:
+
+| Field | Type |
+|---|---|
+| `permissionLevel` | `view`, `manage`, or `owner` |
+| `canViewLocation` | boolean |
+| `canManageContacts` | boolean |
+| `canManageCaregivers` | boolean |
+| `canAcknowledgeAlerts` | boolean |
+
+```json
+{ "permissionLevel": "view" }
+```
+
+**Response `200`** — the updated link, same shape as `POST /family/invites`.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | No fields sent, or a sent field is malformed |
+| `403` | `not_permitted` | The caller is not the elderly user this link belongs to — not even an `owner`-level family member may use this on someone else's behalf |
+| `404` | `link_not_found` | No link with that id |
+| `409` | `link_not_active` | The link is `pending` or `revoked` |
+
+---
+
 ## Emergency Contacts (Phase 1 step 4)
 
 Hand-entered contact CRUD — the escalate-a-linked-account action above is the only other way a row reaches this table. `contact_user_id` is always `null` here: a neighbour or doctor with no account is the normal case.
@@ -1348,6 +1386,116 @@ Any of `POST`'s content fields, including `priority` on its own — **there is n
 
 ---
 
+## Geofencing (Phase 3 step 3)
+
+A safe zone (or restricted zone) is a circle: a centre point and a radius, stored on `geofences` — no PostGIS, that is deliberate on the table itself. A breach is a real `alerts` row (`alertType: "geofence_breach"`), not a lighter-weight notification — it goes through the same `advanceFanout` escalation a fall alert does (full `emergency_contacts` list, every channel a contact opted into), just at `severity: "high"` rather than SOS's `"critical"`. It does **not** go through the family broadcast push tier — that stays SOS-only, same as it already was for fall alerts.
+
+**Where the check happens: the server, not the phone.** Every `POST /emergency/locations` write (background tracking's ~90s/75m-movement cadence, or a foreground mount) is compared against the caller's active zones right after it's stored. Detection latency is therefore bounded by however often a location reading arrives, not instant — the trade for not needing to sync zone definitions to the device or reach for OS-level geofencing.
+
+**Hysteresis.** A reading only counts as a transition if it disagrees with the *previous* stored `locations` row for that zone (sitting still near the boundary produces two identical classifications in a row, not a re-fire each time), and only if it clears the boundary by more than its own `accuracyMeters` (or 20m, if the reading has none). This absorbs ordinary GPS jitter at the edge of a zone without needing a state column on `geofences` itself — the same "derive, don't store" approach escalation progress already uses.
+
+**Auto-resolve on return.** A zone alerts in one direction (`alertOnExit` and/or `alertOnEnter`) and auto-resolves the opposite: leaving a zone you were alerted for *entering*, or returning to a zone you were alerted for *leaving*, both close out whatever active `geofence_breach` alert exists for that zone — `resolvedBy: null`, since nobody had to act. For the common safe-zone case (`alertOnExit: true`, the default) this means coming home closes the alert automatically.
+
+**Permission — reused from `family_links`, no new column.** Read (`GET`): the elderly user, or a family member with an active link and `canViewLocation: true` — a zone is location data, gated like any other. Write (`POST`/`PATCH`/`DELETE`): the same, plus `permissionLevel` `manage` or `owner` — the first real use of the `manage` tier, which existed in the enum but gated nothing until now. The elderly user can see who holds `manage`/`owner` via `GET /family/links` and step it back down via `PATCH /family/links/:id` without revoking the relationship outright — see above.
+
+### `POST /emergency/geofences`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `name` | string | **yes** | 1–100 characters |
+| `centerLatitude` | number | **yes** | -90 to 90 |
+| `centerLongitude` | number | **yes** | -180 to 180 |
+| `radiusMeters` | integer | **yes** | Positive whole number |
+| `elderlyUserId` | string (UUID) | required only if the caller is not the elderly user | Whose zone this is |
+| `alertOnExit` | boolean | no | Default `true` |
+| `alertOnEnter` | boolean | no | Default `false` |
+
+```json
+{ "name": "Home", "centerLatitude": 12.9716, "centerLongitude": 77.5946, "radiusMeters": 150 }
+```
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "geofence": {
+    "id": "7c9e6f3a-1234-4d5e-8f9a-0b1c2d3e4f5a",
+    "userId": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+    "name": "Home",
+    "centerLatitude": "12.971600",
+    "centerLongitude": "77.594600",
+    "radiusMeters": 150,
+    "fenceType": "safe_zone",
+    "alertOnExit": true,
+    "alertOnEnter": false,
+    "isActive": true,
+    "createdBy": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+    "createdAt": "2026-08-28T10:00:00.000Z",
+    "updatedAt": "2026-08-28T10:00:00.000Z"
+  }
+}
+```
+
+`createdBy` is separate from `userId` — a family member with `manage`/`owner` can create a zone for the elderly user, and `createdBy` is who actually did it. `fenceType` is always `"safe_zone"` — the column allows other values but nothing in this API defines what they'd mean yet, so it isn't a caller option.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | A field is missing/malformed, or `elderlyUserId` missing for a non-elderly caller |
+| `403` | `not_permitted` | Caller lacks `canViewLocation` + `manage`/`owner` on an active link to this elderly user |
+
+---
+
+### `GET /emergency/geofences`
+
+Active zones only, newest first.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `elderlyUserId` | required only if the caller is not the elderly user | |
+
+**Response `200`**
+
+```json
+{ "status": "ok", "count": 1, "geofences": [ { "...": "one zone, same shape as above" } ] }
+```
+
+**Errors:** `400 validation_failed` (missing `elderlyUserId` for a non-elderly caller), `403 not_permitted` (lacks `canViewLocation` on an active link).
+
+---
+
+### `PATCH /emergency/geofences/:id`
+
+Any of `POST`'s content fields, any subset — at least one required.
+
+**Response `200`** — the updated zone.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | No fields sent, or a sent field is malformed |
+| `403` | `not_permitted` | Caller lacks `canViewLocation` + `manage`/`owner` for this zone's elderly user |
+| `404` | `geofence_not_found` | No such zone, or it has been deleted |
+
+---
+
+### `DELETE /emergency/geofences/:id`
+
+**Soft delete** — sets `isActive: false`. Never a hard delete: `alerts.geofenceId` references this table, and a past breach alert needs a real row to say which zone it was about — a hard delete would `SET NULL` there and lose that. There is no undelete through this API, same as emergency contacts.
+
+**Response `200`** — the zone, now `isActive: false`.
+
+**Errors:** `403 not_permitted`, `404 geofence_not_found` (including a zone already deleted).
+
+---
+
 ## Known limitations
 
 **Pre-registration invites do not work.** `POST /family/invites` can only invite someone who has already registered an account — the invitee is looked up by phone, and an unregistered number returns `404 invitee_not_registered`. For real users this is the common case, not an edge case: a daughter installs the app for her mother, then wants to invite a brother who has nothing installed yet. Today he has to register first, then be invited. Building pre-registration invites (an invite record keyed on a phone number rather than a user id, resolved and turned into a real `family_links` row the moment that phone number registers) is a real feature, not a quick fix — it needs its own table or a nullable `family_user_id`, a way to notify the inviter once the invite resolves, and a decision on how long an unclaimed invite stays valid. Not attempted here.
@@ -1365,13 +1513,15 @@ Everything below is planned but does not exist. Do not code against it — it wi
 | Area | Phase | Owner |
 |---|---|---|
 | Caregiver profiles, search, booking, scheduling, attendance | 2 | [Teammate B] |
-| Geofences, breach detection, live location over WebSockets | 3 | Sree |
+| Live location over WebSockets, map UI for zones and breaches | 3 | Sree |
 | Care plans, activity reports, tasks, reviews | 4 | [Teammate B] |
 | Ambulance booking, disaster alerts, response centre, fall trigger | 5 | [Teammate C] |
 | Pre-registration invites (invite someone with no account yet) | 1 | Sree |
 | Keeping the emergency-contact copy fresh after a linked account changes | 1 | Sree |
 | Undeleting a soft-deleted emergency contact | 1 | Sree |
+| Owner-tier family member editing another family member's permissions (`PATCH /family/links/:id` is elderly-only today) | 1 | Sree |
+| On-device (OS-level) geofencing for instant detection — today's check runs server-side on each location write, bounded by tracking cadence | 3 | Sree |
 
-**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above. `POST /family/invites`, `POST /family/invites/:id/accept`, `POST /family/invites/:id/decline`, `POST /family/links/:id/revoke`, `GET /family/links`, `POST /family/links/:id/emergency-contact` — see "Family Links" above. `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id` — see "Emergency Contacts" above. The family broadcast push tier — see "Notification channels and escalation" above.
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above. `POST /family/invites`, `POST /family/invites/:id/accept`, `POST /family/invites/:id/decline`, `POST /family/links/:id/revoke`, `GET /family/links`, `POST /family/links/:id/emergency-contact`, `PATCH /family/links/:id` — see "Family Links" above. `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id` — see "Emergency Contacts" above. `POST /emergency/geofences`, `GET /emergency/geofences`, `PATCH /emergency/geofences/:id`, `DELETE /emergency/geofences/:id`, and server-side breach detection with auto-resolve-on-return — see "Geofencing" above. The family broadcast push tier — see "Notification channels and escalation" above.
 
 `family_links` and `emergency_contacts` rows both must still be created directly (no management endpoints for either yet) — same situation, same reason: nothing in this step needed one, so nothing was built ahead of being asked for. See `backend/scripts/seed-test-users.js` for how development data gets in either table today.

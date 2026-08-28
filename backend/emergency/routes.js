@@ -11,9 +11,14 @@
 //   GET  /emergency/family/alerts/history recent resolved/cancelled alerts, last 7 days
 //   POST /emergency/locations            record one GPS reading
 //   POST /emergency/device-tokens        register this device for push
+//   POST /emergency/geofences            define a safe (or restricted) zone
+//   GET  /emergency/geofences            list zones for an elderly user
+//   PATCH /emergency/geofences/:id       edit a zone
+//   DELETE /emergency/geofences/:id      soft-delete a zone
 //
-// Phase 1, step 3: emergency contact notification and escalation. No
-// geofencing, no map UI (Phase 3). See BUILD_LOG.md.
+// Phase 1, step 3: emergency contact notification and escalation.
+// Phase 3, step 3: geofencing — breach detection lives in geofenceCheck.js,
+// called from POST /locations below; no map UI yet. See BUILD_LOG.md.
 // ============================================================================
 
 import { Router } from 'express';
@@ -50,7 +55,16 @@ import {
   deactivateContact,
   nextContactPriority,
 } from './contacts.js';
-import { hasManageContactsPermission } from '../family/links.js';
+import {
+  toPublicGeofence,
+  findGeofenceById,
+  listGeofencesForUser,
+  createGeofence,
+  updateGeofence,
+  deactivateGeofence,
+} from './geofences.js';
+import { checkGeofences } from './geofenceCheck.js';
+import { hasManageContactsPermission, hasViewGeofencesPermission, hasManageGeofencesPermission } from '../family/links.js';
 import {
   validateListQuery,
   validateCloseAlertBody,
@@ -62,6 +76,9 @@ import {
   validateCreateContactBody,
   validateContactsListQuery,
   validateUpdateContactBody,
+  validateCreateGeofenceBody,
+  validateUpdateGeofenceBody,
+  validateGeofenceListQuery,
 } from './validate.js';
 
 export const emergencyRouter = Router();
@@ -87,6 +104,16 @@ function requireContactId(req) {
   const { id } = req.params;
   if (!UUID_RE.test(id)) {
     throw badRequest('validation_failed', 'Contact id is not a valid identifier.', {
+      details: [{ field: 'id', message: 'Must be a UUID.' }],
+    });
+  }
+  return id;
+}
+
+function requireGeofenceId(req) {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) {
+    throw badRequest('validation_failed', 'Geofence id is not a valid identifier.', {
       details: [{ field: 'id', message: 'Must be a UUID.' }],
     });
   }
@@ -340,6 +367,13 @@ emergencyRouter.post('/locations', requireAuth, async (req, res) => {
     return;
   }
 
+  // Fire-and-forget, same "never a precondition" principle as SOS fanout —
+  // evaluating geofences must never delay the response to a routine location
+  // write. See geofenceCheck.js for how a breach or return gets detected.
+  checkGeofences(req.user.id, row).catch((err) =>
+    console.error(`Geofence check failed for user ${req.user.id}:`, err)
+  );
+
   res.status(201).json({ status: 'ok', location: toPublicLocation(row) });
 });
 
@@ -451,4 +485,81 @@ emergencyRouter.delete('/contacts/:id', requireAuth, async (req, res) => {
 
   const updated = await deactivateContact(id);
   res.json({ status: 'ok', contact: toPublicContact(updated) });
+});
+
+// ---------------------------------------------------------------------------
+// Geofences — safe zones (or restricted zones) around a point. Phase 3 step
+// 3. A breach is a real alerts row (alert_type = 'geofence_breach'), created
+// by geofenceCheck.js from inside POST /locations above, not by anything
+// here — these four routes only manage the zone definitions themselves.
+//
+// Read: the owning elderly user, or a family member with an active link and
+// can_view_location = true. Write (create/edit/delete): the same, plus
+// permission_level 'manage' or 'owner' — see hasManageGeofencesPermission,
+// family/links.js. The elderly user can see who holds that tier via GET
+// /family/links, and step it back down via PATCH /family/links/:id
+// (family/routes.js) without revoking the whole relationship.
+// ---------------------------------------------------------------------------
+
+async function requireGeofenceViewPermission(req, elderlyUserId) {
+  const permitted = await hasViewGeofencesPermission(req.user.id, elderlyUserId);
+  if (!permitted) {
+    throw forbidden('not_permitted', 'You are not permitted to view safe zones for this account.');
+  }
+}
+
+async function requireGeofenceManagePermission(req, elderlyUserId) {
+  const permitted = await hasManageGeofencesPermission(req.user.id, elderlyUserId);
+  if (!permitted) {
+    throw forbidden('not_permitted', 'You are not permitted to manage safe zones for this account.');
+  }
+}
+
+emergencyRouter.post('/geofences', requireAuth, async (req, res) => {
+  const input = validateCreateGeofenceBody(req.body);
+
+  requireElderlyUserId(req, input.elderlyUserId);
+  const userId = req.user.role === 'elderly' ? req.user.id : input.elderlyUserId;
+
+  await requireGeofenceManagePermission(req, userId);
+
+  const geofence = await createGeofence({ userId, ...input, createdBy: req.user.id });
+  res.status(201).json({ status: 'ok', geofence: toPublicGeofence(geofence) });
+});
+
+emergencyRouter.get('/geofences', requireAuth, async (req, res) => {
+  const { elderlyUserId } = validateGeofenceListQuery(req.query);
+
+  requireElderlyUserId(req, elderlyUserId);
+  const userId = req.user.role === 'elderly' ? req.user.id : elderlyUserId;
+
+  await requireGeofenceViewPermission(req, userId);
+
+  const geofences = await listGeofencesForUser(userId);
+  res.json({ status: 'ok', count: geofences.length, geofences: geofences.map(toPublicGeofence) });
+});
+
+emergencyRouter.patch('/geofences/:id', requireAuth, async (req, res) => {
+  const id = requireGeofenceId(req);
+  const patch = validateUpdateGeofenceBody(req.body);
+
+  const existing = await findGeofenceById(id);
+  if (!existing || !existing.is_active) throw notFound('geofence_not_found', 'No safe zone with that id.');
+
+  await requireGeofenceManagePermission(req, existing.user_id);
+
+  const updated = await updateGeofence(id, patch);
+  res.json({ status: 'ok', geofence: toPublicGeofence(updated) });
+});
+
+emergencyRouter.delete('/geofences/:id', requireAuth, async (req, res) => {
+  const id = requireGeofenceId(req);
+
+  const existing = await findGeofenceById(id);
+  if (!existing || !existing.is_active) throw notFound('geofence_not_found', 'No safe zone with that id.');
+
+  await requireGeofenceManagePermission(req, existing.user_id);
+
+  const updated = await deactivateGeofence(id);
+  res.json({ status: 'ok', geofence: toPublicGeofence(updated) });
 });

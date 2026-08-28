@@ -230,6 +230,76 @@ export async function hasManageContactsPermission(actorUserId, elderlyUserId) {
  * routes.js's .../emergency-contact, this always reflects the account's
  * current name.
  */
+/**
+ * Read access to an elderly user's geofences (Phase 3 step 3): the elderly
+ * user themselves, or a family member with an active link and
+ * can_view_location = true — a safe zone is location data, gated the same
+ * way any other location data already is.
+ */
+export async function hasViewGeofencesPermission(actorUserId, elderlyUserId) {
+  if (actorUserId === elderlyUserId) return true;
+  const link = await findActiveLink(actorUserId, elderlyUserId);
+  return !!link && link.can_view_location === true;
+}
+
+/**
+ * Write access (create/edit/delete a zone): the same can_view_location gate
+ * as read, plus permission_level 'manage' or 'owner' — the first real use of
+ * 'manage', which existed in the enum but gated nothing until now (only
+ * 'owner' has ever been checked anywhere, for sending invites and revoking
+ * on someone else's behalf). can_view_location is required on top of the
+ * tier check so a family member can never define boundaries around a
+ * location they aren't themselves permitted to see.
+ */
+export async function hasManageGeofencesPermission(actorUserId, elderlyUserId) {
+  if (actorUserId === elderlyUserId) return true;
+  const link = await findActiveLink(actorUserId, elderlyUserId);
+  return (
+    !!link &&
+    link.can_view_location === true &&
+    (link.permission_level === 'manage' || link.permission_level === 'owner')
+  );
+}
+
+/**
+ * Elderly-only edit of an active link's permission fields — this is the
+ * surgical undo for granting 'manage'/'owner' (geofence-write access, among
+ * other things): step the tier back down without severing the whole
+ * relationship the way POST /links/:id/revoke does. Scoped to
+ * (id, elderly_user_id, status='active') in the WHERE clause itself, not a
+ * separate ownership check — only the elderly user who owns this link can
+ * ever match, and a revoked or pending link can't be edited this way either.
+ * An owner-tier family member editing another family member's permissions on
+ * the elderly user's behalf is not built here — see API.md.
+ */
+export async function updateLinkPermissions(id, elderlyUserId, fields) {
+  const columns = {
+    permissionLevel: 'permission_level',
+    canViewLocation: 'can_view_location',
+    canManageContacts: 'can_manage_contacts',
+    canManageCaregivers: 'can_manage_caregivers',
+    canAcknowledgeAlerts: 'can_acknowledge_alerts',
+  };
+
+  const sets = [];
+  const values = [];
+  for (const [key, column] of Object.entries(columns)) {
+    if (fields[key] !== undefined) {
+      values.push(fields[key]);
+      sets.push(`${column} = $${values.length}`);
+    }
+  }
+
+  values.push(id, elderlyUserId);
+  const { rows } = await query(
+    `UPDATE family_links SET ${sets.join(', ')}
+      WHERE id = $${values.length - 1} AND elderly_user_id = $${values.length} AND status = 'active'
+      RETURNING *`,
+    values
+  );
+  return rows[0] ?? null;
+}
+
 export async function listLinksForElderly(elderlyUserId, status) {
   const { rows } = await query(
     status

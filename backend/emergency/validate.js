@@ -351,6 +351,99 @@ export function validateUpdateContactBody(body = {}) {
   return result;
 }
 
+/**
+ * POST /emergency/geofences. `elderlyUserId` required only when the caller
+ * isn't the elderly user — routes.js decides that, same pattern as contacts.
+ * `centerLatitude`/`centerLongitude` reuse coordinateErrors, required here:
+ * unlike an SOS press, a zone with no center means nothing.
+ */
+export function validateCreateGeofenceBody(body = {}) {
+  const { elderlyUserId, name, centerLatitude, centerLongitude, radiusMeters, alertOnExit, alertOnEnter } = body;
+
+  const errors = [
+    ...coordinateErrors(centerLatitude, centerLongitude, { required: true }),
+    ...fieldErrors([
+      { when: elderlyUserId !== undefined && !CONTACT_UUID_RE.test(elderlyUserId),
+        field: 'elderlyUserId', message: 'elderlyUserId must be a UUID.' },
+      { when: typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 100,
+        field: 'name', message: 'Name is required, 1-100 characters.' },
+      { when: !Number.isInteger(radiusMeters) || radiusMeters <= 0,
+        field: 'radiusMeters', message: 'radiusMeters must be a positive whole number.' },
+      { when: alertOnExit !== undefined && typeof alertOnExit !== 'boolean',
+        field: 'alertOnExit', message: 'alertOnExit must be a boolean.' },
+      { when: alertOnEnter !== undefined && typeof alertOnEnter !== 'boolean',
+        field: 'alertOnEnter', message: 'alertOnEnter must be a boolean.' },
+    ]),
+  ];
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return {
+    elderlyUserId: elderlyUserId ?? null,
+    name: name.trim(),
+    centerLatitude,
+    centerLongitude,
+    radiusMeters,
+    alertOnExit: alertOnExit ?? true,
+    alertOnEnter: alertOnEnter ?? false,
+  };
+}
+
+/** PATCH /emergency/geofences/:id — every field optional, but at least one must be present. */
+export function validateUpdateGeofenceBody(body = {}) {
+  const { name, centerLatitude, centerLongitude, radiusMeters, alertOnExit, alertOnEnter } = body;
+
+  const anyCoordProvided = centerLatitude !== undefined || centerLongitude !== undefined;
+  const anyFieldProvided = [name, centerLatitude, centerLongitude, radiusMeters, alertOnExit, alertOnEnter]
+    .some((v) => v !== undefined);
+
+  const errors = [
+    ...(anyCoordProvided ? coordinateErrors(centerLatitude, centerLongitude, { required: true }) : []),
+    ...fieldErrors([
+      { when: !anyFieldProvided, field: 'body', message: 'At least one field must be provided.' },
+      { when: name !== undefined && (typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 100),
+        field: 'name', message: 'Name must be 1-100 characters.' },
+      { when: radiusMeters !== undefined && (!Number.isInteger(radiusMeters) || radiusMeters <= 0),
+        field: 'radiusMeters', message: 'radiusMeters must be a positive whole number.' },
+      { when: alertOnExit !== undefined && typeof alertOnExit !== 'boolean',
+        field: 'alertOnExit', message: 'alertOnExit must be a boolean.' },
+      { when: alertOnEnter !== undefined && typeof alertOnEnter !== 'boolean',
+        field: 'alertOnEnter', message: 'alertOnEnter must be a boolean.' },
+    ]),
+  ];
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  const result = {};
+  if (name !== undefined) result.name = name.trim();
+  if (centerLatitude !== undefined) result.centerLatitude = centerLatitude;
+  if (centerLongitude !== undefined) result.centerLongitude = centerLongitude;
+  if (radiusMeters !== undefined) result.radiusMeters = radiusMeters;
+  if (alertOnExit !== undefined) result.alertOnExit = alertOnExit;
+  if (alertOnEnter !== undefined) result.alertOnEnter = alertOnEnter;
+  return result;
+}
+
+/** GET /emergency/geofences — elderlyUserId required only for a non-elderly caller. */
+export function validateGeofenceListQuery(query = {}) {
+  const { elderlyUserId } = query;
+
+  const errors = fieldErrors([
+    { when: elderlyUserId !== undefined && !CONTACT_UUID_RE.test(elderlyUserId),
+      field: 'elderlyUserId', message: 'elderlyUserId must be a UUID.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return { elderlyUserId: elderlyUserId ?? null };
+}
+
 /** POST /emergency/alerts/:id/cancel and /resolve share this body shape. */
 export function validateCloseAlertBody(body = {}) {
   const { note } = body;

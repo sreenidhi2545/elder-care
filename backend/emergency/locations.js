@@ -1,9 +1,10 @@
 // ============================================================================
 // Locations — database access
 //
-// Phase 1, step 2: capture and storage only. Nothing here reads this table
-// back yet — no map UI, no geofencing (Phase 3). Same split as alerts.js:
+// Phase 1, step 2: capture and storage only. Same split as alerts.js:
 // routes.js decides what is allowed, this file only knows how to write rows.
+// Phase 3 step 3's geofence check reads this table back (the previous
+// reading, to detect a boundary crossing) — see geofenceCheck.js, not here.
 // ============================================================================
 
 import { query } from '../shared/db/pool.js';
