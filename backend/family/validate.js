@@ -74,6 +74,44 @@ export function validateInviteBody(body = {}) {
   };
 }
 
+/**
+ * PATCH /family/links/:id — elderly-only edit of an existing active link's
+ * permission fields. Every field optional, but at least one must be present
+ * — same shape as emergency/validate.js's validateUpdateContactBody.
+ */
+export function validateUpdateLinkPermissionsBody(body = {}) {
+  const { permissionLevel, canViewLocation, canManageContacts, canManageCaregivers, canAcknowledgeAlerts } = body;
+
+  const anyFieldProvided = [permissionLevel, canViewLocation, canManageContacts, canManageCaregivers, canAcknowledgeAlerts]
+    .some((v) => v !== undefined);
+
+  const errors = fieldErrors([
+    { when: !anyFieldProvided, field: 'body', message: 'At least one field must be provided.' },
+    { when: permissionLevel !== undefined && !PERMISSION_LEVELS.includes(permissionLevel),
+      field: 'permissionLevel', message: `permissionLevel must be one of: ${PERMISSION_LEVELS.join(', ')}.` },
+    { when: canViewLocation !== undefined && typeof canViewLocation !== 'boolean',
+      field: 'canViewLocation', message: 'canViewLocation must be a boolean.' },
+    { when: canManageContacts !== undefined && typeof canManageContacts !== 'boolean',
+      field: 'canManageContacts', message: 'canManageContacts must be a boolean.' },
+    { when: canManageCaregivers !== undefined && typeof canManageCaregivers !== 'boolean',
+      field: 'canManageCaregivers', message: 'canManageCaregivers must be a boolean.' },
+    { when: canAcknowledgeAlerts !== undefined && typeof canAcknowledgeAlerts !== 'boolean',
+      field: 'canAcknowledgeAlerts', message: 'canAcknowledgeAlerts must be a boolean.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  const result = {};
+  if (permissionLevel !== undefined) result.permissionLevel = permissionLevel;
+  if (canViewLocation !== undefined) result.canViewLocation = canViewLocation;
+  if (canManageContacts !== undefined) result.canManageContacts = canManageContacts;
+  if (canManageCaregivers !== undefined) result.canManageCaregivers = canManageCaregivers;
+  if (canAcknowledgeAlerts !== undefined) result.canAcknowledgeAlerts = canAcknowledgeAlerts;
+  return result;
+}
+
 /** GET /family/links — optional status filter, same values the column allows. */
 export function validateListLinksQuery(query = {}) {
   const { status } = query;

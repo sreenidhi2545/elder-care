@@ -55,7 +55,7 @@ import { colors, spacing, type } from '../../shared/ui/theme';
 const POLL_WITH_ACTIVE_MS = 10_000;
 const POLL_IDLE_MS = 20_000;
 
-export function FamilyHomeScreen() {
+export function FamilyHomeScreen({ navigation }) {
   const { user, signOut } = useAuth();
 
   const [alerts, setAlerts] = useState([]);
@@ -159,6 +159,36 @@ export function FamilyHomeScreen() {
       >
         <Text style={styles.title}>Family dashboard</Text>
         <Text style={styles.subtitle}>Signed in as {user?.fullName}</Text>
+
+        <Pressable
+          style={styles.familyLinksButton}
+          onPress={() => navigation.navigate('FamilyLinks')}
+          accessibilityRole="button"
+          accessibilityLabel="Family links: pending invites and who you're linked to"
+        >
+          <Text style={styles.familyLinksButtonText}>Family Links</Text>
+          <Text style={styles.familyLinksButtonSubtext}>Pending invites & who you're linked to</Text>
+        </Pressable>
+
+        <Pressable
+          style={styles.familyLinksButton}
+          onPress={() => navigation.navigate('Bookings')}
+          accessibilityRole="button"
+          accessibilityLabel="My caregiver bookings"
+        >
+          <Text style={styles.familyLinksButtonText}>My Bookings</Text>
+          <Text style={styles.familyLinksButtonSubtext}>Caregiver requests, confirmed and past visits</Text>
+        </Pressable>
+
+        <Pressable
+          style={styles.familyLinksButton}
+          onPress={() => navigation.navigate('Visits')}
+          accessibilityRole="button"
+          accessibilityLabel="Visits"
+        >
+          <Text style={styles.familyLinksButtonText}>Visits</Text>
+          <Text style={styles.familyLinksButtonSubtext}>Scheduled visits and attendance status</Text>
+        </Pressable>
 
         {banner && (
           <Pressable onPress={() => setBanner(null)} style={styles.banner}>
@@ -411,6 +441,16 @@ const styles = StyleSheet.create({
   content: { padding: spacing.md, gap: spacing.md },
   title: { fontSize: type.title, fontWeight: '700', color: colors.text },
   subtitle: { fontSize: type.body, color: colors.textMuted, marginTop: -spacing.sm },
+  familyLinksButton: {
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: 14,
+    padding: spacing.md,
+    gap: 2,
+  },
+  familyLinksButtonText: { fontSize: type.body, fontWeight: '800', color: colors.primary },
+  familyLinksButtonSubtext: { fontSize: type.small, color: colors.textMuted },
   banner: { backgroundColor: '#FEF3C7', borderRadius: 12, padding: spacing.md },
   bannerText: { fontSize: type.body, color: colors.text, fontWeight: '600' },
   sectionHeading: { fontSize: type.heading, fontWeight: '700', color: colors.text },

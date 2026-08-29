@@ -37,6 +37,34 @@ const TEST_USERS = [
   { phone: '9000000002', fullName: 'Test Family', role: 'family' },
   { phone: '9000000003', fullName: 'Test Caregiver', role: 'caregiver' },
   { phone: '9000000004', fullName: 'Test Admin', role: 'admin' },
+  { phone: '9000000005', fullName: 'Test Caregiver Pending', role: 'caregiver' },
+];
+
+// A verified profile makes /caregiver/search return something; a pending one
+// makes the admin verification queue (GET /caregiver/verification-queue)
+// return something. Without both, one of those two screens is empty in a
+// fresh install and looks broken even though it works.
+const TEST_CAREGIVER_PROFILES = [
+  {
+    phone: '9000000003',
+    serviceAreaCity: 'Bengaluru',
+    hourlyRate: 250,
+    specializations: ['elderly_care', 'dementia_care'],
+    languages: ['English', 'Hindi', 'Kannada'],
+    experienceYears: 5,
+    qualifications: 'Certified Nursing Assistant',
+    verificationStatus: 'verified',
+  },
+  {
+    phone: '9000000005',
+    serviceAreaCity: 'Bengaluru',
+    hourlyRate: 200,
+    specializations: ['post_surgery_care'],
+    languages: ['English', 'Tamil'],
+    experienceYears: 2,
+    qualifications: 'Home Health Aide',
+    verificationStatus: 'pending',
+  },
 ];
 
 // POST /family/invites now exists, but going through invite-then-accept here
@@ -114,6 +142,59 @@ for (const user of TEST_USERS) {
   const row = rows[0];
   idByPhone[user.phone] = row.id;
   console.log(`  ${row.phone.padEnd(15)} ${row.role.padEnd(10)} ${row.inserted ? 'created' : 'updated'}`);
+}
+
+const adminId = idByPhone[TEST_USERS.find((u) => u.role === 'admin').phone];
+
+for (const profile of TEST_CAREGIVER_PROFILES) {
+  const userId = idByPhone[profile.phone];
+  if (!userId) {
+    console.error(`  caregiver_profile SKIPPED — ${profile.phone}`);
+    process.exitCode = 1;
+    continue;
+  }
+
+  const isVerified = profile.verificationStatus === 'verified';
+
+  // Upsert on user_id, same conflict target upsertCaregiverProfile uses.
+  const { rows } = await query(
+    `INSERT INTO caregivers (
+        user_id, service_area_city, hourly_rate, specializations, languages,
+        experience_years, qualifications, verification_status, id_verified,
+        verified_at, verified_by
+     ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8::verification_status, $9,
+        CASE WHEN $9 = TRUE THEN now() ELSE NULL END,
+        CASE WHEN $9 = TRUE THEN $10::uuid ELSE NULL END
+     )
+     ON CONFLICT (user_id) DO UPDATE
+        SET service_area_city   = EXCLUDED.service_area_city,
+            hourly_rate         = EXCLUDED.hourly_rate,
+            specializations     = EXCLUDED.specializations,
+            languages           = EXCLUDED.languages,
+            experience_years    = EXCLUDED.experience_years,
+            qualifications      = EXCLUDED.qualifications,
+            verification_status = EXCLUDED.verification_status,
+            id_verified         = EXCLUDED.id_verified,
+            verified_at         = EXCLUDED.verified_at,
+            verified_by         = EXCLUDED.verified_by
+     RETURNING id, (xmax = 0) AS inserted`,
+    [
+      userId,
+      profile.serviceAreaCity,
+      profile.hourlyRate,
+      profile.specializations,
+      profile.languages,
+      profile.experienceYears,
+      profile.qualifications,
+      profile.verificationStatus,
+      isVerified,
+      adminId,
+    ]
+  );
+
+  const row = rows[0];
+  console.log(`  caregiver_profile  ${profile.phone.padEnd(15)} ${profile.verificationStatus.padEnd(10)} ${row.inserted ? 'created' : 'updated'}`);
 }
 
 const elderlyId = idByPhone[TEST_FAMILY_LINK.elderlyPhone];

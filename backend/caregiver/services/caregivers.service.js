@@ -182,6 +182,17 @@ export async function searchCaregivers({
   };
 }
 
+export async function listPendingCaregivers() {
+  const { rows } = await query(
+    `SELECT c.*, u.full_name, u.email, u.phone, u.profile_photo_url
+       FROM caregivers c
+       JOIN users u ON u.id = c.user_id
+      WHERE c.verification_status = 'pending' AND u.is_active = TRUE
+      ORDER BY c.created_at ASC`
+  );
+  return rows.map(toCaregiverResponse);
+}
+
 export async function updateCaregiverVerification(caregiverId, status, adminUserId) {
   const isVerified = status === 'verified';
   const { rows } = await query(

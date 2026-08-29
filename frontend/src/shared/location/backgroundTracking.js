@@ -23,7 +23,7 @@ import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
-import { BACKGROUND_LOCATION_TASK } from './backgroundLocationTaskName';
+import { BACKGROUND_LOCATION_TASK, TIME_INTERVAL_MS, DISTANCE_INTERVAL_METERS } from './backgroundLocationTaskName';
 
 const PREFERENCE_KEY = 'eldercare.backgroundTrackingEnabled';
 const SUPPORTED = Platform.OS === 'android';
@@ -55,6 +55,17 @@ export async function isTrackingActive() {
  * BUILD_LOG.md for the battery-vs-freshness reasoning. Balanced matches the
  * accuracy already used for SOS-time capture (captureLocation.js) — good
  * enough to say roughly where someone is, far cheaper than a locked GPS fix.
+ *
+ * deferredUpdatesInterval/deferredUpdatesDistance (added 2026-08-28) ask
+ * Android to batch fixes rather than deliver each one as it's produced —
+ * timeInterval/distanceInterval alone are a requested cadence, not a
+ * guaranteed one: the fused provider is free to deliver faster whenever it's
+ * already producing fixes at a higher rate for any reason, which is exactly
+ * what was happening (see BUILD_LOG.md, 2026-08-28 — confirmed ~5s delivery
+ * against a 90s/75m request, from stored `locations` rows). This is still
+ * only the OS-facing half of the fix — backgroundLocationTask.js enforces
+ * the same floor itself on every delivery, so correctness doesn't depend on
+ * how any given OEM's Play services build actually honors this request.
  */
 export async function enableBackgroundTracking() {
   if (!SUPPORTED) return { started: false, reason: 'unsupported_platform' };
@@ -82,8 +93,10 @@ export async function enableBackgroundTracking() {
 
   await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
     accuracy: Location.Accuracy.Balanced,
-    timeInterval: 90_000,
-    distanceInterval: 75,
+    timeInterval: TIME_INTERVAL_MS,
+    distanceInterval: DISTANCE_INTERVAL_METERS,
+    deferredUpdatesInterval: TIME_INTERVAL_MS,
+    deferredUpdatesDistance: DISTANCE_INTERVAL_METERS,
     showsBackgroundLocationIndicator: true,
     foregroundService: {
       notificationTitle: 'ElderCare location sharing is on',

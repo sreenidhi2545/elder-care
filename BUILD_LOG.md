@@ -319,10 +319,14 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 
 - **Phone numbers not normalised** — closed 2026-08-12. Normalised to E.164 in `backend/shared/phone.js`, applied by both `validateRegister` and `validateLogin`, documented in `API.md`, existing rows migrated. See the entry above.
 - **Whether `can_acknowledge_alerts` should also permit cancelling an alert, not just resolving it** — closed 2026-08-15. Decided against: `cancel` stays owner-only. See the Phase 1 step 3 entry below for the recommendation and why.
+- **`emergency_contacts.phone` is not normalised** — closed 2026-08-29. Turned out to already be fixed: `bd0ddd9` (2026-08-28, the family link/contact CRUD commit) added `normalizePhone` to both `validateCreateContactBody` and `validateUpdateContactBody` in `emergency/validate.js`, and the link-promotion path (`family/routes.js`'s `.../emergency-contact`) copies `users.phone`, which is always already canonical — this entry was simply never closed out afterwards. Checked the dev database directly: 2 rows, both already E.164. Added `backend/scripts/normalize-contact-phones.js` (same dry-run-by-default convention as `normalize-phones.js`), scoped for the `(user_id, phone)` collision shape `uq_contact_per_user` actually has rather than reusing `normalize-phones.js`'s global-phone version — dry run against the dev database reports 0 rows to rewrite, 0 collisions. Also checked `family/routes.js`'s `findContactByPhone(link.elderly_user_id, familyUser.phone)` — the comparison that would have silently stopped matching if this had stayed unnormalised — and confirmed it's correct today because both sides are canonical.
+- **`JWT_SECRET` length is only a warning, not a startup failure** — closed 2026-08-29. `shared/config/env.js` now `process.exit(1)`s below 32 characters, same fail-loud pattern already used for a missing `DATABASE_URL`/`JWT_SECRET`, instead of `console.warn`. 32 is unchanged from the original threshold. Verified live: `JWT_SECRET=tooshort node server.js` now exits immediately with the character count and a pointer to `.env`; a real secret starts normally.
+- **`caregivers.average_rating`/`total_reviews` not maintained by the database** — closed 2026-08-29. Phase 4 (`caregiver/services/reviews.service.js`, teammate B) already recalculates both after `createReview` — not touched here. Added `recalc_caregiver_rating()` + `trg_reviews_recalc_caregiver_rating` (`AFTER INSERT OR UPDATE OR DELETE ON reviews`) to `schema.sql`, applied live to the dev database, and verified against a throwaway caregiver + review: insert (0.00→5.00, 0→1), a second insert (→4.00, →2), editing that review's rating 3→1 (→3.00, unchanged count), hiding it via `is_visible = FALSE` (→5.00, →1), then deleting the remaining one (→0.00, →0) — every step correct, throwaway rows removed after.
+
+  **For whoever picks up Phase 4 reviews next (teammate B):** the trigger now owns this column pair. The manual recalculation in `createReview` (the two-query `UPDATE caregivers SET average_rating = ..., total_reviews = ...` right after the `INSERT INTO reviews`) is redundant — the trigger fires on that same `INSERT` and computes the identical value, so it isn't wrong, just unnecessary work. Safe to delete whenever that file is next touched. More importantly: an update-review or hide-review (`is_visible`) endpoint, whenever one is built, does **not** need its own recalculation step — the trigger already covers `UPDATE` and `DELETE` on `reviews`, not just `INSERT`. This was also the actual gap in the old approach: the two queries in `createReview` were never wrapped in one transaction, so a crash between them could leave the aggregate stale until the next review for that caregiver. The trigger closes that too, since it runs in the same statement-level transaction as the write itself.
 
 ### Open
 
-- **`emergency_contacts.phone` is not normalised yet.** The table is empty, so there is nothing to migrate, but Phase 1 must run contact numbers through `normalizePhone` when it starts writing them — otherwise the same duplicate problem reappears on a table where a duplicate means someone gets called twice and someone else not at all.
 - **No tests.** Every verification so far has been manual `curl` against a running server, plus a Metro bundle for the app. Nothing catches a regression automatically. `shared/phone.js` is the first piece of pure logic in the codebase with enough branches to be worth unit tests, and it is the natural place to start.
 - **The temporary sign-in panel** in `frontend/src/shared/screens/LoginScreen.js` must go when the real login screen lands. It is marked on screen and in the code, but nothing enforces its removal.
 - **The app shell is unverified on a real device.** It bundles and the backend calls are proven, but nothing has confirmed the phone reaches the backend over Wi-Fi, that SecureStore persists across a restart, or that each role visibly lands on its own screen.
@@ -330,9 +334,7 @@ Things known to be wrong or undecided. Each should be closed before the work tha
 - **Expo Go caps the SDK at 54.** Phase 1 needs native modules Expo Go cannot provide — Twilio, background location, push notifications beyond the basics — so a development build is coming whether or not the SDK moves. Worth planning before Phase 1 rather than discovering it mid-phase.
 - **No mobile app.** Phase 0 steps 4 and 5 — the Expo shell and the login and registration screens — are the remaining work, and there is no frontend code at all yet.
 - **No admin account** in the development database, so the admin-only endpoint cannot be tested until one is promoted.
-- **`JWT_SECRET` length is only a warning, not a startup failure.** Acceptable in development; it must not reach a deployment that way.
 - **Location retention purge** is deferred to Phase 6. The `locations` table grows without bound until it is written.
-- **`caregivers.average_rating` and `total_reviews`** are not maintained by the database. Whoever builds reviews in Phase 4 must recalculate them in the same transaction that writes the review.
 - **Overlapping caregiver visits** are not prevented by the database, only identical start times. The application has to check.
 - **Identity document numbers** are deliberately not stored. If the client requires them, the answer is a hash plus the document in a separate access-controlled store — not a plain column.
 - **The SOS button flow is unverified on a real device.** Bundling proves it compiles; it does not prove the 5-second countdown, the confirm-to-cancel step, or the polling behaviour hold up under an actual press on an actual phone. See the 2026-08-15 entry below.
@@ -797,6 +799,8 @@ Found while reviewing early background-tracking data from the step-2 dev build a
 
 Checked how often `ElderlyHomeScreen`'s mount-time capture effect (empty dependency array — fires once per mount, not once per app-open) can actually fire in production, since today's 7–10 second gaps looked too frequent to be real usage. `AppNavigator` gives the elderly role exactly one screen, so in-app navigation never remounts it, and `AuthContext` has no `AppState` listener, so backgrounding/resuming without the OS killing the process doesn't remount it either — only a genuine cold start or sign-out/sign-in does. The rapid gaps in today's data are much better explained by Metro's Fast Refresh doing a full JS reload on nearly every save while testing a dev client, which won't exist once this runs as a preview build with no Metro attached. **Decision: hold off on a rate-limiting guard until real preview-build data (with `source` now populated) shows whether cold-start frequency is actually a problem** — adding one now would be guarding against a volume this test data doesn't represent.
 
+**Wrong — see the 2026-08-28 "Background tracking interval not respected" entry below.** A preview build with no Metro attached still produced `source = 'background_task'` rows roughly 5 seconds apart. The Fast Refresh explanation above was never actually tested against the case it was explaining away; it happened to be plausible and was accepted without the preview-build check this log's own later entries insist on doing first. Left in place rather than deleted, per this log's own convention (see the 2026-08-28 family-links entry's correction note) — the reasoning here was reasonable given what was known at the time, it just turned out to be about the wrong code path (foreground mount, not the background task) and was never confirmed against Metro-free data before being written down as the answer.
+
 ### Preview build
 
 `eas build --profile preview --platform android --non-interactive` from `frontend/`. Build `63d6c3c9-764c-439f-8c9f-5fd788c9b1f0`, `preview`/`internal`/Android APK, SDK 54.0.0. Started 04:17:49 UTC, finished 04:27:47 UTC — about 10 minutes, ~7s combined queue/wait time. Same reused remote Android credentials as the earlier dev build (`Build Credentials xvQ8M3_gWV`). Artifact: `https://expo.dev/artifacts/eas/nnXYwyMhuVFO_t_Q8zQY1htoEKYeSnQvdEYEEhqVkyE.apk`.
@@ -1205,3 +1209,127 @@ Not yet exercised: anything from the mobile app itself — every check above was
 
 **Known Limitations:**
 - Automatic fall detection relies on phone motion sensors and must be on/near the user's person. It is not medically validated or clinically certified. Background/closed-app detection is not implemented.
+
+---
+## 2026-08-28 — Background tracking interval not respected: earlier Fast Refresh explanation was wrong
+
+**The 2026-08-16 "Foreground-mount frequency" entry above was wrong**, corrected in place there rather than removed. It attributed rapid location gaps to Metro Fast Refresh remounting `ElderlyHomeScreen`'s foreground capture, and explicitly deferred a rate-limiting guard until preview-build data could confirm or rule that out. That data now exists: a preview build with no Metro attached still produced `locations` rows with `source = 'background_task'` — the background task itself, not the foreground mount effect the earlier entry was about — landing roughly 5 seconds apart against a requested `timeInterval: 90_000`. Since a commit landed this same day making every `POST /emergency/locations` also run a geofence check (`checkGeofences`, fire-and-forget from `routes.js`), that 18x-of-intended write rate was also triggering 18x the geofence evaluation work per user per day — the volume estimate below.
+
+### Diagnosis
+
+Queried `locations` directly for recent `source = 'background_task'` rows: deliveries every ~5.0–5.9s (occasional ~10s gaps — a missed tick, not a slower one), and — the decisive part — latitude/longitude essentially unchanged between consecutive rows, device stationary throughout. That rules out "the distance floor is working, only the time floor isn't": `distanceInterval: 75` wasn't gating delivery either, since nothing moved 75m in 5 seconds.
+
+`backgroundTracking.js`'s call to `startLocationUpdatesAsync` set `timeInterval`/`distanceInterval` and nothing else. Checked `expo-location`'s own type definitions (`Location.types.d.ts`): `deferredUpdatesInterval` — "Minimum time interval... that must pass since last reported location before all later locations are reported in a batched update" — defaults to `0` when unset. On Android, `timeInterval`/`distanceInterval` map to `LocationRequest.setInterval()`/`setSmallestDisplacement()`, which the fused location provider treats as a requested cadence, not a guaranteed one — it can and does deliver faster whenever it's already producing fixes at a higher rate for any reason (another app's concurrent request, the OS's own passive provider, or simply because this task runs as a foreground service — `showsBackgroundLocationIndicator`/`foregroundService`, needed for the task to survive backgrounding at all — which exempts it from Android's normal background-location throttling). The only thing that turns the requested interval into an actual delivery floor is batching, i.e. `setMaxWaitTime`, exposed here as `deferredUpdatesInterval`/`deferredUpdatesDistance`. Neither was ever set.
+
+**Flagged rather than asserted as certain, same as this log's standing rule:** whether setting `deferredUpdatesInterval` alone would have been sufficient — versus batching the same underlying 5s-rate samples into fewer, larger deliveries without actually reducing how many get taken — is Android/Play-services implementation behavior neither `expo-location`'s types nor this codebase document, and nothing here tests it in isolation. Not worth resolving by inference: the fix below doesn't depend on the answer either way.
+
+### Fix — `backgroundLocationTaskName.js`, `backgroundTracking.js`, `backgroundLocationTask.js`
+
+`TIME_INTERVAL_MS` (90,000) and `DISTANCE_INTERVAL_METERS` (75) moved into `backgroundLocationTaskName.js` — already the shared-values file for exactly this reason (its own header comment: "kept in its own file so neither has to import the other") — so both the OS request and the app-level enforcement below read the same numbers, not two copies that can drift.
+
+**Two changes, deliberately not just one:**
+
+1. `startLocationUpdatesAsync`'s options now also pass `deferredUpdatesInterval: TIME_INTERVAL_MS` and `deferredUpdatesDistance: DISTANCE_INTERVAL_METERS` — the correct signal to give Android, and free if it works as documented.
+2. `backgroundLocationTask.js` no longer trusts that signal to be sufficient. It now tracks the last *accepted* reading (not the last delivery) in a small file-backed marker — `eldercare-location-throttle-marker.json`, same `expo-file-system/legacy` pattern `locationQueue.js` already uses, and file-backed for the same reason: whether this JS engine survives between headless invocations isn't something to assume. Every delivery is checked against that marker before it ever reaches `enqueueLocation`: if less than 90s has passed *and* less than 75m has been covered since the last accepted reading, the delivery is dropped — never queued, never sent, never triggers a geofence check. `haversineMeters` is duplicated from the backend's `geofenceCheck.js` rather than shared — different runtime, small enough not to be worth a cross-package module for one function.
+
+This makes the fix correct regardless of how change 1 actually behaves on any given device/Play-services version — the first-ever reading (no marker file yet) still always gets accepted, same "no previous reading means establish baseline" behavior `geofenceCheck.js` already uses server-side.
+
+### Not yet verified
+
+No preview build has been produced against this specific fix. Once one is, it needs a real device check confirming `source = 'background_task'` rows land no closer than ~90s apart (or a genuine 75m move) under normal use, and a rough count of `POST /emergency/locations` calls per hour compared against the ~5s-interval baseline this entry measured.
+
+---
+
+## 2026-08-29 — Near-miss: a fall alert sent with no GPS fix was rejected outright
+
+**Found during a full application audit** (endpoint/screen coverage, request-shape matching, dead-end flows, authorization) requested specifically to read the code rather than trust this log. Confirmed live before touching anything, then fixed and re-verified live.
+
+### The bug
+
+`frontend/src/emergency/api/alerts.js`'s `createFallAlert` built its request body as:
+
+```js
+latitude: location?.latitude ?? null,
+longitude: location?.longitude ?? null,
+```
+
+When `captureCurrentLocation()` fails — indoors, GPS off, permission denied, timed out — `FallDetectionScreen.js` passes `location: null` into `createFallAlert` on both the manual "I FELL" path and the automatic 10-second-countdown path, by design: a missing fix must never block sending help. But sending literal `null` for `latitude`/`longitude`, rather than omitting the keys, is not the same thing over the wire — `JSON.stringify` keeps a `null`-valued key and drops an `undefined`-valued one. The backend's `coordinateErrors` (`backend/emergency/validate.js`, shared by the SOS and fall-alert bodies) only ever recognised `latitude === undefined` as "not provided." A `null` fell through to the "must be a number between -90 and 90" check, which `null` fails, and the whole request was rejected with `400 validation_failed`.
+
+`createSosAlert`, three functions above it in the same file, does the equivalent conversion correctly (`?? undefined`) — this was an isolated one-line regression in `createFallAlert`, not a pattern repeated elsewhere in that file. Reproduced against the running backend before any fix: `POST /emergency/alerts/fall` with `{ latitude: null, longitude: null }` → `400`, `details` naming both fields.
+
+**Why this one matters more than an ordinary validation bug:** the no-GPS case isn't an edge case for this feature, it's a normal one — a fall serious enough to trigger the sensor heuristics or prompt someone to press "I FELL" is exactly the situation where being indoors, having a weak fix, or the phone having lost GPS lock is plausible. The fallback path that exists specifically to make sure a missing location never blocks the alert was the one thing silently defeating it.
+
+### Fix — belt and braces on both sides, not just the one that broke
+
+1. **Client** (`emergency/api/alerts.js`): `createFallAlert` now converts a missing coordinate to `?? undefined`, matching `createSosAlert` and `attachAlertLocation` in the same file — the field is omitted from the request entirely, same as every other optional-and-absent field in this app.
+2. **Validator** (`emergency/validate.js`): `coordinateErrors` now treats `null` and `undefined` identically as "not provided" (a new `isMissing` helper), rather than only recognising `undefined`. This is deliberately redundant with fix 1 — the client no longer sends `null` for these fields, but nothing stops a future caller (this endpoint, or the geofence/locations endpoints that share the same function) from making the same mistake, and the validator is the one place that would catch it regardless of which client got it wrong.
+
+### Verified live
+
+Backend restarted with both changes, exercised directly against `POST /emergency/alerts/fall` and `POST /emergency/alerts`, one fresh test account per case to avoid the one-active-alert-at-a-time conflict:
+
+| Case | Result |
+|---|---|
+| Fall alert, explicit `{ latitude: null, longitude: null }` | `201` (previously `400`) |
+| Fall alert, coordinates omitted entirely (what the client now actually sends) | `201` |
+| Fall alert, real coordinates | `201` |
+| SOS, no body at all | `201` — unaffected |
+| SOS, real coordinates | `201` — unaffected |
+| `POST /emergency/locations` (coordinates *required* there) with coordinates missing | still `400 validation_failed` — confirms the widened "not provided" check didn't loosen the required case |
+
+Test accounts deleted afterward.
+
+---
+
+## 2026-08-29 — Scheduling and attendance screens (frontend)
+
+**Backend already shipped all 8 endpoints** (`POST`/`GET`/`PATCH /caregiver/schedules`, `GET /caregiver/schedules/:id`, `POST /caregiver/attendance/schedules/:scheduleId/check-in` and `/check-out`, `PATCH /caregiver/attendance/:id/verify`, `GET /caregiver/attendance`, `GET /caregiver/attendance/:id`) with the ownership rules from the 2026-08-27 authorization fix (`isAssignedCaregiver`, `hasManageCaregiversPermission`) already enforced server-side. This step is frontend only: `CaregiverScheduleScreen` (caregiver's own schedule, check-in/check-out), `VisitsScreen` (elderly/family view, verify action), `ScheduleVisitScreen` (create a slot from a confirmed booking), plus entry points wired into `CaregiverHomeScreen`, `ElderlyHomeScreen`, `FamilyHomeScreen`, `BookingsScreen`, and `CaregiverBookingsScreen`. New API.md section documents all 8 endpoints.
+
+Two gaps were caught during planning and handled deliberately rather than just noted:
+
+### 1. Check-out before check-in — the caregiver gets a way out, not a dead end
+
+`recordCheckOut` (`attendance.service.js`) 400s with `not_checked_in` if there's no check-in yet for the slot. The check-out button on `CaregiverScheduleScreen` only ever renders once the last-loaded schedule list shows a check-in already recorded, so in the ordinary flow this can't fire — but the list can go stale (a second device, or the screen left open across a slow shift), so it can still happen in practice. Rather than let that surface as a plain error banner leaving the caregiver stuck looking at a failed button, `handleCheckOut` catches `ApiError` with `status === 400, code === 'not_checked_in'` specifically and swaps the card into a "You haven't checked in to this visit yet" state with a "Check In Now" button, reusing the same check-in path. One 400 code branch, no new endpoint.
+
+### 2. Overnight visits — not supported, rejected clearly instead of stored oddly
+
+`validateCreateSchedule` (`caregiver/services/validate.js`) already requires `endTime > startTime`, which means a visit cannot cross midnight — there's one `visitDate` and two times, no second date for an end time to roll into. This was already true of the backend before this step; decided to accept it as a real limitation for now rather than redesign the schema to carry a separate end-date, since nothing in this phase needs an overnight visit yet. What changed: `ScheduleVisitScreen` now checks `endTime <= startTime` client-side before submitting, with a message that says why ("End time must be after start time. Visits spanning midnight are not supported yet.") instead of letting a same-day-backwards or accidental-overnight entry either round-trip to a generic `400 validation_failed` or — if a UI bug ever let it through unvalidated — get silently misinterpreted as some other day. The backend check stays as the real guard; this is belt-and-braces at the point of entry, same reasoning as the fall-alert coordinate fix above.
+
+### Two more gaps flagged, not fixed, staying open
+
+- **`POST /caregiver/schedules` never checks the booking it's created from is `confirmed`** — nothing server-side stops a slot being scheduled against a `requested` or `cancelled` booking. The only gate is client-side: `ScheduleVisitScreen` is reachable only from a confirmed-booking row on `BookingsScreen`/`CaregiverBookingsScreen`. Fine for this app today (one client), but worth remembering if a second client, or an admin tool, ever calls this endpoint directly.
+- **Attendance check-in/check-out has no `accuracyMeters` field and does no distance check** against the elderly user's known location, unlike `POST /emergency/locations`. Whatever coordinates are sent are stored as-is — a caregiver could check in from anywhere. Not fixed here; flagged in the new API.md section.
+
+### One UI limitation accepted, not a backend gap
+
+`toScheduleResponse` (`schedules.service.js`) embeds `attendanceId`/`attendanceStatus`/`checkInAt`/`checkOutAt` on a schedule row, but not `verifiedByFamily` — this task asked to use that embed rather than fetching attendance separately, and the embed simply doesn't carry that field. `VisitsScreen` therefore can't tell an already-verified visit apart from an unverified one after a fresh load; pressing Verify flips that row to "Verified" for the current screen session only (local state), and a reload shows "Verify" again. Re-pressing is harmless — the backend PATCH just re-sets the same flag to `true`. A one-line addition to `toScheduleResponse`'s `SELECT`/mapping would close this if it turns out to matter in practice; not done here since it wasn't asked for and the workaround is genuinely harmless.
+
+---
+
+## 2026-08-29 — Care plan screens (frontend), and a permission gap worth revisiting
+
+**Backend already shipped all 5 endpoints** (`POST`/`GET`/`PATCH /caregiver/care-plans`, `GET /caregiver/care-plans/:id`, `GET /caregiver/care-plans/elderly/:elderlyUserId`) with the authorization-fix rules already enforced server-side. Frontend only: `CarePlanScreen` (view, shared by every role) and `CarePlanFormScreen` (create/update), plus entry points on `CaregiverScheduleScreen` (a "View Care Plan" link per visit — every row there already has a real schedule with that elderly user, so the read-permission check `caregiverHasAssignmentWith` is satisfied by construction, no extra lookup needed to decide whether to show the link), `ElderlyHomeScreen` (self), and `FamilyLinksScreen` (per linked elderly user, gated on `link.canManageCaregivers`). New API.md section documents all 5 endpoints.
+
+### The permission model doesn't support what was asked for, and that's worth recording
+
+The initial screen spec was "View — for caregivers, and read-only family; Edit — elderly, manage-tier family, admin," treating read-only family as a third, distinct viewer. It isn't one. `requireCarePlanReadPermission` and `requireCarePlanWritePermission` (`care-plans.routes.js`) both gate on the exact same `hasManageCaregiversPermission` flag (`family/links.js`) for a family caller — there's no second, lesser flag (no `can_view_care_plan` alongside `can_manage_caregivers`, the way geofences split `can_view_location` from a separate manage-tier check). A family member either has `can_manage_caregivers = true`, in which case they can read *and* write, or they don't, in which case they get `403` on both. The only viewer who is actually locked to read-only by the backend is a caregiver — excluded from `POST`/`PATCH` at the route's `requireRole` gate itself, not merely by the permission function.
+
+**Shipped as the two-way split the backend actually has:** one view screen (`CarePlanScreen`) whose Edit button is gated on nothing more than `viewer.role !== 'caregiver'` — correct, because any elderly/family/admin viewer who successfully loaded the screen already cleared the identical write gate. A caregiver viewer gets an explicit "View only" badge in the header (not just a missing button, which could read as a bug) and no edit path exists in the navigation graph for that role at all — `CarePlanFormScreen` isn't even registered in `CaregiverNavigator`.
+
+**Worth revisiting, not built here:** a real view-vs-edit split for family — "can see the allergy list, can't change it" — is a reasonable permission tier for medical data that the current model has no way to express. Closing this would mean a second flag on `family_links` (`can_view_care_plans` or similar, same shape as the `can_view_location`/manage-tier split geofences already has) and splitting `requireCarePlanReadPermission` off from the write check instead of sharing `hasManageCaregiversPermission` wholesale. Left as a schema/permission decision for whoever owns that tradeoff next, not something to default into silently while building screens.
+
+---
+
+## 2026-08-29 — Tasks, activity reports, and reviews screens (frontend)
+
+**Backend already shipped all three sets of endpoints** — tasks (`POST`/`GET /caregiver/tasks`, `GET /caregiver/tasks/:id`, `PATCH /caregiver/tasks/:id/status`), activity reports (`POST`/`GET /caregiver/reports`, `GET /caregiver/reports/:id`), reviews (`POST /caregiver/reviews`, `GET /caregiver/reviews/caregiver/:caregiverId`, `GET /caregiver/reviews/:id`) — with the authorization-fix rules already enforced server-side. Frontend only: `ScheduleTasksScreen` + `TaskFormScreen`, `ReportFormScreen` + `ReportScreen`, `ReviewFormScreen`, plus a Reviews section added to `CaregiverDetailScreen`. Entry points on `CaregiverScheduleScreen`/`VisitsScreen` (tasks and reports attach to a visit) and `BookingsScreen` (reviews attach to a completed booking). New `## Tasks`, `## Activity Reports`, `## Reviews` sections in API.md.
+
+**No `PATCH /caregiver/reviews` exists** — the initial ask assumed one; the route only has `POST`/`GET`. Matches `uq_review_per_booking (booking_id, reviewer_user_id)`: a review is create-once by design, not an editable draft. Built create + read only.
+
+### The per-day report constraint is a data-model limitation, not a UI choice
+
+`activity_reports` has `uq_report_per_day UNIQUE (caregiver_id, elderly_user_id, report_date)` — one report per caregiver, per elderly user, per calendar day, full stop. A caregiver with two separate visits to the same elderly user on the same day (an unusual schedule, but nothing in `schedules.service.js`'s overlap check prevents two non-overlapping same-day slots) can file a report for the first visit and then gets `409 duplicate_report` trying to file one for the second — there is no way to attach a second report to that second visit today, because the uniqueness is keyed on the day, not on `scheduleId`. `GET /caregiver/reports` has no `scheduleId` filter either, for the same reason: the backend's own notion of "the report for this visit" is `caregiverId + elderlyUserId + date`, not the schedule itself. `ReportFormScreen`/`ReportScreen` are built around that real key rather than pretending a `scheduleId`-based lookup exists. Worth fixing at the schema level (the constraint would need to include `schedule_id`, with a `NULL`-schedule fallback for reports not tied to a specific visit) if multi-visit-per-day ever becomes a real caregiver workflow; not attempted here — this is backend work, not something a frontend screen can route around correctly.
+
+### Activity reports are qualitative only — vitals tracking is not built
+
+`activity_reports.vitals` is a JSONB column with no shape enforced anywhere in `validate.js` beyond "must be an object" — there's no schema for what a vitals reading looks like (blood pressure? temperature? blood sugar?), and no UI anywhere in this app that collects one. `ReportFormScreen` does not send `vitals` at all, same treatment as `photoUrls` (no upload exists either). Every report created through this app is text — summary, meals, medications, mood, sleep hours, concerns — never a structured vitals reading. **If the client's spec assumes vitals tracking (a real possibility for a caregiver product), that's unbuilt, not degraded** — it would need a real design (which vitals, what units, what ranges count as a concern) before a form makes sense, not a bolted-on generic key-value JSON editor. Flagged in the new API.md Activity Reports section as well.

@@ -19,7 +19,7 @@
 import { query } from '../shared/db/pool.js';
 
 export function toPublicFamilyLink(row) {
-  return {
+  const link = {
     id: row.id,
     elderlyUserId: row.elderly_user_id,
     familyUserId: row.family_user_id,
@@ -40,6 +40,21 @@ export function toPublicFamilyLink(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+
+  // Only present when the row came from listLinksForElderly/listLinksForFamily
+  // below, which join `users` for exactly this — a plain family_links row (an
+  // invite just created or accepted, say) has no full_name/phone to attach and
+  // these keys are simply omitted rather than sent null. `relationship` alone
+  // cannot tell two family members apart, and is often blank; this is the
+  // caller's-eye-view name for whichever side of the link isn't them.
+  if (row.family_full_name !== undefined) {
+    link.familyUser = { fullName: row.family_full_name, phone: row.family_phone };
+  }
+  if (row.elderly_full_name !== undefined) {
+    link.elderlyUser = { fullName: row.elderly_full_name, phone: row.elderly_phone };
+  }
+
+  return link;
 }
 
 export async function findLinkById(id) {
@@ -206,21 +221,139 @@ export async function hasManageContactsPermission(actorUserId, elderlyUserId) {
   return !!link && link.can_manage_contacts === true;
 }
 
+/**
+ * Joins `users` on family_user_id so the caller — the elderly user — gets
+ * the linked family member's current name and phone, not just their id and
+ * whatever `relationship` free text was typed at invite time (often blank,
+ * and useless for telling two family members apart if it isn't). Read at
+ * request time, not copied — unlike the emergency_contacts snapshot in
+ * routes.js's .../emergency-contact, this always reflects the account's
+ * current name.
+ */
+/**
+ * Read access to an elderly user's location data: the elderly user
+ * themselves, or a family member with an active link and
+ * can_view_location = true. Backs GET /emergency/geofences (a safe zone is
+ * location data, gated the same way any other location data already is) and
+ * GET /emergency/locations/latest (Phase 3 step 3's "last known location"
+ * zone-centre flow).
+ */
+export async function hasViewLocationPermission(actorUserId, elderlyUserId) {
+  if (actorUserId === elderlyUserId) return true;
+  const link = await findActiveLink(actorUserId, elderlyUserId);
+  return !!link && link.can_view_location === true;
+}
+
+/**
+ * Write access (create/edit/delete a zone): the same can_view_location gate
+ * as read, plus permission_level 'manage' or 'owner' — the first real use of
+ * 'manage', which existed in the enum but gated nothing until now (only
+ * 'owner' has ever been checked anywhere, for sending invites and revoking
+ * on someone else's behalf). can_view_location is required on top of the
+ * tier check so a family member can never define boundaries around a
+ * location they aren't themselves permitted to see.
+ */
+export async function hasManageGeofencesPermission(actorUserId, elderlyUserId) {
+  if (actorUserId === elderlyUserId) return true;
+  const link = await findActiveLink(actorUserId, elderlyUserId);
+  return (
+    !!link &&
+    link.can_view_location === true &&
+    (link.permission_level === 'manage' || link.permission_level === 'owner')
+  );
+}
+
+/**
+ * Read+write access to the caregiver module (bookings, schedules, care
+ * plans, tasks, activity reports, verifying attendance) on an elderly user's
+ * behalf: the elderly user themselves, or a family member with an active
+ * link and can_manage_caregivers = true. One flag rather than the
+ * view/manage split geofences uses — the caregiver module has no separate
+ * "can see but not act" tier today, only "participates in this person's
+ * caregiver arrangement or doesn't." can_manage_caregivers already existed
+ * on family_links and was grantable via POST /family/invites and PATCH
+ * /family/links/:id before this — it just gated nothing yet.
+ */
+export async function hasManageCaregiversPermission(actorUserId, elderlyUserId) {
+  if (actorUserId === elderlyUserId) return true;
+  const link = await findActiveLink(actorUserId, elderlyUserId);
+  return (
+    !!link &&
+    link.can_manage_caregivers === true
+  );
+}
+
+/**
+ * Elderly-only edit of an active link's permission fields — this is the
+ * surgical undo for granting 'manage'/'owner' (geofence-write access, among
+ * other things): step the tier back down without severing the whole
+ * relationship the way POST /links/:id/revoke does. Scoped to
+ * (id, elderly_user_id, status='active') in the WHERE clause itself, not a
+ * separate ownership check — only the elderly user who owns this link can
+ * ever match, and a revoked or pending link can't be edited this way either.
+ * An owner-tier family member editing another family member's permissions on
+ * the elderly user's behalf is not built here — see API.md.
+ */
+export async function updateLinkPermissions(id, elderlyUserId, fields) {
+  const columns = {
+    permissionLevel: 'permission_level',
+    canViewLocation: 'can_view_location',
+    canManageContacts: 'can_manage_contacts',
+    canManageCaregivers: 'can_manage_caregivers',
+    canAcknowledgeAlerts: 'can_acknowledge_alerts',
+  };
+
+  const sets = [];
+  const values = [];
+  for (const [key, column] of Object.entries(columns)) {
+    if (fields[key] !== undefined) {
+      values.push(fields[key]);
+      sets.push(`${column} = $${values.length}`);
+    }
+  }
+
+  values.push(id, elderlyUserId);
+  const { rows } = await query(
+    `UPDATE family_links SET ${sets.join(', ')}
+      WHERE id = $${values.length - 1} AND elderly_user_id = $${values.length} AND status = 'active'
+      RETURNING *`,
+    values
+  );
+  return rows[0] ?? null;
+}
+
 export async function listLinksForElderly(elderlyUserId, status) {
   const { rows } = await query(
     status
-      ? `SELECT * FROM family_links WHERE elderly_user_id = $1 AND status = $2 ORDER BY created_at DESC`
-      : `SELECT * FROM family_links WHERE elderly_user_id = $1 ORDER BY created_at DESC`,
+      ? `SELECT fl.*, u.full_name AS family_full_name, u.phone AS family_phone
+           FROM family_links fl
+           JOIN users u ON u.id = fl.family_user_id
+          WHERE fl.elderly_user_id = $1 AND fl.status = $2
+          ORDER BY fl.created_at DESC`
+      : `SELECT fl.*, u.full_name AS family_full_name, u.phone AS family_phone
+           FROM family_links fl
+           JOIN users u ON u.id = fl.family_user_id
+          WHERE fl.elderly_user_id = $1
+          ORDER BY fl.created_at DESC`,
     status ? [elderlyUserId, status] : [elderlyUserId]
   );
   return rows;
 }
 
+/** Same idea as listLinksForElderly, joined the other way: the elderly account's name/phone for a family caller. */
 export async function listLinksForFamily(familyUserId, status) {
   const { rows } = await query(
     status
-      ? `SELECT * FROM family_links WHERE family_user_id = $1 AND status = $2 ORDER BY created_at DESC`
-      : `SELECT * FROM family_links WHERE family_user_id = $1 ORDER BY created_at DESC`,
+      ? `SELECT fl.*, u.full_name AS elderly_full_name, u.phone AS elderly_phone
+           FROM family_links fl
+           JOIN users u ON u.id = fl.elderly_user_id
+          WHERE fl.family_user_id = $1 AND fl.status = $2
+          ORDER BY fl.created_at DESC`
+      : `SELECT fl.*, u.full_name AS elderly_full_name, u.phone AS elderly_phone
+           FROM family_links fl
+           JOIN users u ON u.id = fl.elderly_user_id
+          WHERE fl.family_user_id = $1
+          ORDER BY fl.created_at DESC`,
     status ? [familyUserId, status] : [familyUserId]
   );
   return rows;

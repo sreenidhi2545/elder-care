@@ -33,16 +33,22 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-// A short signing key is the weak link in an otherwise sound token scheme:
-// it can be brute-forced offline from a single captured JWT. Warn rather than
-// exit so development is not blocked, but this must be fixed before deploying.
+// A short signing key is the weak link in an otherwise sound token scheme: it
+// can be brute-forced offline from a single captured JWT. This used to be a
+// console.warn, which meant a deployment with a weak secret would start up
+// fine and stay silently vulnerable until someone happened to read the logs.
+// Same fail-loud-at-startup treatment as the missing-variable check above,
+// for the same reason: catching this here is a one-line message pointing at
+// this file, not a security incident discovered later.
 const MIN_SECRET_LENGTH = 32;
 if (process.env.JWT_SECRET.length < MIN_SECRET_LENGTH) {
-  console.warn(
-    `WARNING: JWT_SECRET is ${process.env.JWT_SECRET.length} characters; ` +
-      `${MIN_SECRET_LENGTH}+ recommended. Generate one with:\n` +
+  console.error(
+    `JWT_SECRET is ${process.env.JWT_SECRET.length} characters; ${MIN_SECRET_LENGTH}+ required.\n` +
+      `Expected it in ${envPath}\n` +
+      `Generate one with:\n` +
       `  node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
   );
+  process.exit(1);
 }
 
 export const config = Object.freeze({

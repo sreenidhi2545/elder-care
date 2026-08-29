@@ -26,16 +26,27 @@ function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+// `null` and `undefined` are both "not provided" here — a caller that omits
+// a field and one that explicitly sends `null` for it mean the same thing.
+// Only `latitude === undefined` used to be recognised, which meant a client
+// sending `{ latitude: null, longitude: null }` (as opposed to leaving the
+// keys out) fell through to the "must be a number" checks below and got
+// rejected. That is exactly what happened to a fall alert sent with no GPS
+// fix — see BUILD_LOG.md.
+function isMissing(value) {
+  return value === undefined || value === null;
+}
+
 /** Shared by the SOS body and the locations endpoint — same column, same rules. */
 function coordinateErrors(latitude, longitude, { required }) {
-  if (!required && latitude === undefined && longitude === undefined) return [];
+  if (!required && isMissing(latitude) && isMissing(longitude)) return [];
 
   return fieldErrors([
-    { when: latitude === undefined || longitude === undefined,
+    { when: isMissing(latitude) || isMissing(longitude),
       field: 'latitude', message: 'latitude and longitude must be sent together.' },
-    { when: latitude !== undefined && (!isFiniteNumber(latitude) || latitude < -90 || latitude > 90),
+    { when: !isMissing(latitude) && (!isFiniteNumber(latitude) || latitude < -90 || latitude > 90),
       field: 'latitude', message: 'Latitude must be a number between -90 and 90.' },
-    { when: longitude !== undefined && (!isFiniteNumber(longitude) || longitude < -180 || longitude > 180),
+    { when: !isMissing(longitude) && (!isFiniteNumber(longitude) || longitude < -180 || longitude > 180),
       field: 'longitude', message: 'Longitude must be a number between -180 and 180.' },
   ]);
 }
@@ -349,6 +360,125 @@ export function validateUpdateContactBody(body = {}) {
   if (notifyByCall !== undefined) result.notifyByCall = notifyByCall;
   if (notifyByPush !== undefined) result.notifyByPush = notifyByPush;
   return result;
+}
+
+/**
+ * POST /emergency/geofences. `elderlyUserId` required only when the caller
+ * isn't the elderly user — routes.js decides that, same pattern as contacts.
+ * `centerLatitude`/`centerLongitude` reuse coordinateErrors, required here:
+ * unlike an SOS press, a zone with no center means nothing.
+ */
+export function validateCreateGeofenceBody(body = {}) {
+  const { elderlyUserId, name, centerLatitude, centerLongitude, radiusMeters, alertOnExit, alertOnEnter } = body;
+
+  const errors = [
+    ...coordinateErrors(centerLatitude, centerLongitude, { required: true }),
+    ...fieldErrors([
+      { when: elderlyUserId !== undefined && !CONTACT_UUID_RE.test(elderlyUserId),
+        field: 'elderlyUserId', message: 'elderlyUserId must be a UUID.' },
+      { when: typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 100,
+        field: 'name', message: 'Name is required, 1-100 characters.' },
+      { when: !Number.isInteger(radiusMeters) || radiusMeters <= 0,
+        field: 'radiusMeters', message: 'radiusMeters must be a positive whole number.' },
+      { when: alertOnExit !== undefined && typeof alertOnExit !== 'boolean',
+        field: 'alertOnExit', message: 'alertOnExit must be a boolean.' },
+      { when: alertOnEnter !== undefined && typeof alertOnEnter !== 'boolean',
+        field: 'alertOnEnter', message: 'alertOnEnter must be a boolean.' },
+    ]),
+  ];
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return {
+    elderlyUserId: elderlyUserId ?? null,
+    name: name.trim(),
+    centerLatitude,
+    centerLongitude,
+    radiusMeters,
+    alertOnExit: alertOnExit ?? true,
+    alertOnEnter: alertOnEnter ?? false,
+  };
+}
+
+/** PATCH /emergency/geofences/:id — every field optional, but at least one must be present. */
+export function validateUpdateGeofenceBody(body = {}) {
+  const { name, centerLatitude, centerLongitude, radiusMeters, alertOnExit, alertOnEnter } = body;
+
+  const anyCoordProvided = centerLatitude !== undefined || centerLongitude !== undefined;
+  const anyFieldProvided = [name, centerLatitude, centerLongitude, radiusMeters, alertOnExit, alertOnEnter]
+    .some((v) => v !== undefined);
+
+  const errors = [
+    ...(anyCoordProvided ? coordinateErrors(centerLatitude, centerLongitude, { required: true }) : []),
+    ...fieldErrors([
+      { when: !anyFieldProvided, field: 'body', message: 'At least one field must be provided.' },
+      { when: name !== undefined && (typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 100),
+        field: 'name', message: 'Name must be 1-100 characters.' },
+      { when: radiusMeters !== undefined && (!Number.isInteger(radiusMeters) || radiusMeters <= 0),
+        field: 'radiusMeters', message: 'radiusMeters must be a positive whole number.' },
+      { when: alertOnExit !== undefined && typeof alertOnExit !== 'boolean',
+        field: 'alertOnExit', message: 'alertOnExit must be a boolean.' },
+      { when: alertOnEnter !== undefined && typeof alertOnEnter !== 'boolean',
+        field: 'alertOnEnter', message: 'alertOnEnter must be a boolean.' },
+    ]),
+  ];
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  const result = {};
+  if (name !== undefined) result.name = name.trim();
+  if (centerLatitude !== undefined) result.centerLatitude = centerLatitude;
+  if (centerLongitude !== undefined) result.centerLongitude = centerLongitude;
+  if (radiusMeters !== undefined) result.radiusMeters = radiusMeters;
+  if (alertOnExit !== undefined) result.alertOnExit = alertOnExit;
+  if (alertOnEnter !== undefined) result.alertOnEnter = alertOnEnter;
+  return result;
+}
+
+/**
+ * GET /emergency/geofences and GET /emergency/locations/latest —
+ * elderlyUserId required only for a non-elderly caller. Same shape for both:
+ * neither takes anything beyond which elderly user's data is being asked
+ * for.
+ */
+export function validateGeofenceListQuery(query = {}) {
+  const { elderlyUserId } = query;
+
+  const errors = fieldErrors([
+    { when: elderlyUserId !== undefined && !CONTACT_UUID_RE.test(elderlyUserId),
+      field: 'elderlyUserId', message: 'elderlyUserId must be a UUID.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return { elderlyUserId: elderlyUserId ?? null };
+}
+
+const DEFAULT_HISTORY_DAYS = 3;
+const MAX_HISTORY_DAYS = 30;
+
+/** GET /emergency/geofences/:id/history — how many days back to tally. */
+export function validateGeofenceHistoryQuery(query = {}) {
+  const { days } = query;
+
+  const errors = fieldErrors([
+    { when: days !== undefined && (!/^\d+$/.test(String(days)) || Number(days) < 1),
+      field: 'days', message: 'days must be a positive whole number.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return {
+    days: days === undefined ? DEFAULT_HISTORY_DAYS : Math.min(Number(days), MAX_HISTORY_DAYS),
+  };
 }
 
 /** POST /emergency/alerts/:id/cancel and /resolve share this body shape. */

@@ -16,6 +16,28 @@ import { DisasterAlertsScreen } from '../../emergency/screens/DisasterAlertsScre
 import { DisasterDetailScreen } from '../../emergency/screens/DisasterDetailScreen';
 import { ResponseCenterScreen } from '../../emergency/screens/ResponseCenterScreen';
 import { FallDetectionScreen } from '../../emergency/screens/FallDetectionScreen';
+import { EmergencyContactsScreen } from '../../emergency/screens/EmergencyContactsScreen';
+import { GeofencesScreen } from '../../emergency/screens/GeofencesScreen';
+import { GeofenceFormScreen } from '../../emergency/screens/GeofenceFormScreen';
+import { CaregiverSearchScreen } from '../../caregiver/screens/CaregiverSearchScreen';
+import { CaregiverDetailScreen } from '../../caregiver/screens/CaregiverDetailScreen';
+import { BookingFormScreen } from '../../caregiver/screens/BookingFormScreen';
+import { BookingsScreen } from '../../caregiver/screens/BookingsScreen';
+import { CaregiverProfileScreen } from '../../caregiver/screens/CaregiverProfileScreen';
+import { CaregiverBookingsScreen } from '../../caregiver/screens/CaregiverBookingsScreen';
+import { CaregiverVerificationScreen } from '../../caregiver/screens/CaregiverVerificationScreen';
+import { CaregiverScheduleScreen } from '../../caregiver/screens/CaregiverScheduleScreen';
+import { VisitsScreen } from '../../caregiver/screens/VisitsScreen';
+import { ScheduleVisitScreen } from '../../caregiver/screens/ScheduleVisitScreen';
+import { CarePlanScreen } from '../../caregiver/screens/CarePlanScreen';
+import { CarePlanFormScreen } from '../../caregiver/screens/CarePlanFormScreen';
+import { ScheduleTasksScreen } from '../../caregiver/screens/ScheduleTasksScreen';
+import { TaskFormScreen } from '../../caregiver/screens/TaskFormScreen';
+import { ReportScreen } from '../../caregiver/screens/ReportScreen';
+import { ReportFormScreen } from '../../caregiver/screens/ReportFormScreen';
+import { ReviewFormScreen } from '../../caregiver/screens/ReviewFormScreen';
+import { ManageFamilyScreen } from '../../family/screens/ManageFamilyScreen';
+import { FamilyLinksScreen } from '../../family/screens/FamilyLinksScreen';
 import { useAuth } from '../auth/AuthContext';
 import { AdminHomeScreen } from '../screens/AdminHomeScreen';
 
@@ -33,6 +55,22 @@ function ElderlyNavigator() {
       <Stack.Screen name="DisasterDetail" component={DisasterDetailScreen} />
       <Stack.Screen name="ResponseCenter" component={ResponseCenterScreen} />
       <Stack.Screen name="FallDetection" component={FallDetectionScreen} />
+      <Stack.Screen name="ManageFamily" component={ManageFamilyScreen} />
+      <Stack.Screen name="EmergencyContacts" component={EmergencyContactsScreen} />
+      <Stack.Screen name="Geofences" component={GeofencesScreen} />
+      <Stack.Screen name="GeofenceForm" component={GeofenceFormScreen} />
+      <Stack.Screen name="CaregiverSearch" component={CaregiverSearchScreen} />
+      <Stack.Screen name="CaregiverDetail" component={CaregiverDetailScreen} />
+      <Stack.Screen name="BookingForm" component={BookingFormScreen} />
+      <Stack.Screen name="Bookings" component={BookingsScreen} />
+      <Stack.Screen name="Visits" component={VisitsScreen} />
+      <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
+      <Stack.Screen name="CarePlan" component={CarePlanScreen} />
+      <Stack.Screen name="CarePlanForm" component={CarePlanFormScreen} />
+      <Stack.Screen name="ScheduleTasks" component={ScheduleTasksScreen} />
+      <Stack.Screen name="TaskForm" component={TaskFormScreen} />
+      <Stack.Screen name="Report" component={ReportScreen} />
+      <Stack.Screen name="ReviewForm" component={ReviewFormScreen} />
     </Stack.Navigator>
   );
 }
@@ -47,6 +85,21 @@ function FamilyNavigator() {
       <Stack.Screen name="DisasterDetail" component={DisasterDetailScreen} />
       <Stack.Screen name="ResponseCenter" component={ResponseCenterScreen} />
       <Stack.Screen name="FallDetection" component={FallDetectionScreen} />
+      <Stack.Screen name="FamilyLinks" component={FamilyLinksScreen} />
+      <Stack.Screen name="Geofences" component={GeofencesScreen} />
+      <Stack.Screen name="GeofenceForm" component={GeofenceFormScreen} />
+      <Stack.Screen name="CaregiverSearch" component={CaregiverSearchScreen} />
+      <Stack.Screen name="CaregiverDetail" component={CaregiverDetailScreen} />
+      <Stack.Screen name="BookingForm" component={BookingFormScreen} />
+      <Stack.Screen name="Bookings" component={BookingsScreen} />
+      <Stack.Screen name="Visits" component={VisitsScreen} />
+      <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
+      <Stack.Screen name="CarePlan" component={CarePlanScreen} />
+      <Stack.Screen name="CarePlanForm" component={CarePlanFormScreen} />
+      <Stack.Screen name="ScheduleTasks" component={ScheduleTasksScreen} />
+      <Stack.Screen name="TaskForm" component={TaskFormScreen} />
+      <Stack.Screen name="Report" component={ReportScreen} />
+      <Stack.Screen name="ReviewForm" component={ReviewFormScreen} />
     </Stack.Navigator>
   );
 }
@@ -55,6 +108,14 @@ function CaregiverNavigator() {
   return (
     <Stack.Navigator screenOptions={screenOptions}>
       <Stack.Screen name="CaregiverHome" component={CaregiverHomeScreen} />
+      <Stack.Screen name="CaregiverProfile" component={CaregiverProfileScreen} />
+      <Stack.Screen name="CaregiverBookings" component={CaregiverBookingsScreen} />
+      <Stack.Screen name="CaregiverSchedule" component={CaregiverScheduleScreen} />
+      <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
+      <Stack.Screen name="CarePlan" component={CarePlanScreen} />
+      <Stack.Screen name="ScheduleTasks" component={ScheduleTasksScreen} />
+      <Stack.Screen name="Report" component={ReportScreen} />
+      <Stack.Screen name="ReportForm" component={ReportFormScreen} />
     </Stack.Navigator>
   );
 }
@@ -63,6 +124,7 @@ function AdminNavigator() {
   return (
     <Stack.Navigator screenOptions={screenOptions}>
       <Stack.Screen name="AdminHome" component={AdminHomeScreen} />
+      <Stack.Screen name="CaregiverVerification" component={CaregiverVerificationScreen} />
     </Stack.Navigator>
   );
 }

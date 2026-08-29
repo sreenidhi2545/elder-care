@@ -19,7 +19,7 @@ export const reviewsRouter = Router();
 // Submit a review for a caregiver
 reviewsRouter.post('/', requireAuth, requireRole('elderly', 'family', 'admin'), async (req, res) => {
   const data = validateCreateReview(req.body);
-  const review = await createReview(data, req.user.id);
+  const review = await createReview(data, req.user);
   res.status(201).json({ status: 'ok', review });
 });
 

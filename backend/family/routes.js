@@ -38,6 +38,7 @@ import {
   revokeLink,
   deactivateLinkedContact,
   hasManageContactsPermission,
+  updateLinkPermissions,
   listLinksForElderly,
   listLinksForFamily,
 } from './links.js';
@@ -47,7 +48,7 @@ import {
   createContact,
   nextContactPriority,
 } from '../emergency/contacts.js';
-import { validateInviteBody, validateListLinksQuery } from './validate.js';
+import { validateInviteBody, validateListLinksQuery, validateUpdateLinkPermissionsBody } from './validate.js';
 
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -219,6 +220,36 @@ familyRouter.post('/links/:id/revoke', requireAuth, async (req, res) => {
   // phone-escalation path open to someone whose dashboard access was just
   // pulled for cause is the wrong default for an emergency product.
   await deactivateLinkedContact(updated.elderly_user_id, updated.family_user_id);
+
+  res.json({ status: 'ok', link: toPublicFamilyLink(updated) });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /family/links/:id — elderly user only. Edits an active link's
+// permission fields without revoking it outright — how the elderly user
+// steps a family member down from 'manage'/'owner' (for instance, after
+// granting geofence-management access — Phase 3 step 3) without losing
+// dashboard access or being phoned as an emergency contact along with it.
+// The elderly user can already see who holds which tier via GET
+// /family/links (permissionLevel, joined with familyUser's name/phone); this
+// is the other half — being able to act on what they see.
+// ---------------------------------------------------------------------------
+
+familyRouter.patch('/links/:id', requireAuth, async (req, res) => {
+  const id = requireLinkId(req);
+  const patch = validateUpdateLinkPermissionsBody(req.body);
+
+  const link = await findLinkById(id);
+  if (!link) throw notFound('link_not_found', 'No family link with that id.');
+
+  if (req.user.id !== link.elderly_user_id) {
+    throw forbidden('not_permitted', "Only the elderly user can change a family member's permissions.");
+  }
+
+  const updated = await updateLinkPermissions(id, req.user.id, patch);
+  if (!updated) {
+    throw conflict('link_not_active', 'This family link is not active.');
+  }
 
   res.json({ status: 'ok', link: toPublicFamilyLink(updated) });
 });

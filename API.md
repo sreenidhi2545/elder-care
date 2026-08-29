@@ -5,7 +5,7 @@
 
 This document is the agreement between the backend and the mobile app. Every endpoint the app is allowed to call is listed here. If you add an endpoint, add it to this file in the same Pull Request. If you need an endpoint that does not exist yet, raise it in the group rather than working around it.
 
-The authentication endpoints, the emergency alert endpoints, GPS capture, notification fanout and broadcast, family link invitations, and emergency contact management exist today. Geofencing and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
+The authentication endpoints, the emergency alert endpoints, GPS capture, notification fanout and broadcast, family link invitations, emergency contact management, and geofencing exist today. Caregiver profile/search/booking are documented below; the rest of the caregiver module (scheduling, attendance, care plans, tasks, activity reports, reviews) exists in the code but is not yet documented here — it arrives with its own screens.
 
 ---
 
@@ -133,6 +133,7 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `GET` | `/emergency/family/alerts` | Bearer + `family` | Active alerts for elderly users the caller is linked to |
 | `GET` | `/emergency/family/alerts/history` | Bearer + `family` | Resolved/cancelled alerts from the last 7 days, same linked users |
 | `POST` | `/emergency/locations` | Bearer | Record one GPS reading |
+| `GET` | `/emergency/locations/latest` | Bearer | Most recent reading for an elderly user |
 | `POST` | `/emergency/device-tokens` | Bearer | Register this device for push notifications |
 | `POST` | `/emergency/ambulance/bookings` | Bearer | Request an emergency ambulance |
 | `GET` | `/emergency/ambulance/bookings/active` | Bearer | Get current active ambulance booking |
@@ -148,10 +149,24 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `POST` | `/family/links/:id/revoke` | Bearer | Pull an active link — elderly user, the family member themselves, or an owner-level family member |
 | `GET` | `/family/links` | Bearer | The caller's own links, either side, optionally filtered by status |
 | `POST` | `/family/links/:id/emergency-contact` | Bearer | Deliberately promote a linked family member to emergency-contact status |
+| `PATCH` | `/family/links/:id` | Bearer + elderly | Edit an active link's permission fields — e.g. step someone back down from `manage`/`owner` |
 | `POST` | `/emergency/contacts` | Bearer | Add a hand-entered emergency contact |
 | `GET` | `/emergency/contacts` | Bearer | The elderly user's contact list, priority order |
 | `PATCH` | `/emergency/contacts/:id` | Bearer | Edit a contact, including reordering via `priority` |
 | `DELETE` | `/emergency/contacts/:id` | Bearer | Soft-delete a contact |
+| `POST` | `/emergency/geofences` | Bearer | Define a safe (or restricted) zone |
+| `GET` | `/emergency/geofences` | Bearer | List zones for an elderly user |
+| `PATCH` | `/emergency/geofences/:id` | Bearer | Edit a zone |
+| `DELETE` | `/emergency/geofences/:id` | Bearer | Soft-delete a zone |
+| `GET` | `/emergency/geofences/:id/history` | Bearer | Recent inside/outside tally for one zone |
+| `POST` | `/caregiver/profile` | Bearer + `caregiver`/`admin` | Create or update the caller's own caregiver profile (upsert) |
+| `GET` | `/caregiver/profile/me` | Bearer + `caregiver`/`admin` | The caller's own caregiver profile |
+| `GET` | `/caregiver/search` | Bearer | Search verified, available caregivers |
+| `GET` | `/caregiver/:id` | Bearer | One caregiver's full profile |
+| `POST` | `/caregiver/bookings` | Bearer + `elderly`/`family`/`admin` | Request a caregiver |
+| `GET` | `/caregiver/bookings` | Bearer | The caller's own bookings, scoped by role |
+| `GET` | `/caregiver/bookings/:id` | Bearer | One booking, if the caller is entitled to see it |
+| `PATCH` | `/caregiver/bookings/:id/status` | Bearer | Confirm, reject, cancel, or mark active/complete — who may make which transition is enforced server-side |
 
 ---
 
@@ -1177,17 +1192,46 @@ Pulls an **active** link. Permitted callers: the elderly user, the family member
 
 The caller's own links, from whichever side they're on: an elderly caller sees who has (or is pending) access to their account; a family caller sees which elderly accounts they're linked to, including invites still awaiting their own response.
 
+**Each link is joined to the other side's current name and phone** — `relationship` is free text set once at invite time (often blank, and useless for telling two family members apart even when set), so this endpoint additionally reads the linked account's `full_name`/`phone` from `users` at request time. An elderly caller's links each carry `familyUser: { fullName, phone }`; a family caller's links each carry `elderlyUser: { fullName, phone }`. Only one of the two is ever present, matching which side the caller is on. **Read live, not copied** — unlike the one-time snapshot `POST /family/links/:id/emergency-contact` writes into `emergency_contacts`, this always reflects the account's current name, so it does not go stale the way that copy can.
+
+This join does not apply to the `link` returned by `POST /family/invites`, `.../accept`, or `.../decline` — those come straight off the row just written, with neither `familyUser` nor `elderlyUser` present. Only `GET /family/links` does the join.
+
 **Query parameters**
 
 | Field | Required | Rules |
 |---|---|---|
 | `status` | no | `pending`, `active`, or `revoked`. Omit for every status |
 
-**Response `200`**
+**Response `200`** — elderly caller:
 
 ```json
-{ "status": "ok", "count": 1, "links": [ { "...": "one link, same shape as above" } ] }
+{
+  "status": "ok",
+  "count": 1,
+  "links": [
+    {
+      "id": "3e31d6e8-a28a-4497-a3af-6b3f47e79523",
+      "elderlyUserId": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+      "familyUserId": "b0d5f3ab-6718-4410-8784-1f16ad26dbec",
+      "relationship": "daughter",
+      "permissionLevel": "owner",
+      "canViewLocation": true,
+      "canManageContacts": false,
+      "canManageCaregivers": false,
+      "canAcknowledgeAlerts": true,
+      "status": "active",
+      "invitedBy": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+      "approvedAt": "2026-08-28T04:31:02.113Z",
+      "revokedAt": null,
+      "createdAt": "2026-08-28T04:29:54.468Z",
+      "updatedAt": "2026-08-28T04:31:02.113Z",
+      "familyUser": { "fullName": "Priya Kumar", "phone": "+919876543211" }
+    }
+  ]
+}
 ```
+
+A family caller's response is the same shape with `elderlyUser: { fullName, phone }` in place of `familyUser`.
 
 ---
 
@@ -1213,6 +1257,39 @@ Permitted: the elderly user, or a family member with `can_manage_contacts = true
 | `404` | `link_not_found` | No link with that id |
 | `409` | `link_not_active` | Link is `pending` or `revoked` |
 | `409` | `contact_already_exists` | This family member's current phone number is already a contact for this elderly user |
+
+---
+
+### `PATCH /family/links/:id`
+
+Elderly user only. Edits an **active** link's permission fields without revoking it outright — the surgical undo for granting `manage`/`owner` (needed for `POST /emergency/geofences` below), stepping a family member back down without losing their dashboard access or emergency-contact status along with it.
+
+The elderly user can already see who holds which tier via `GET /family/links` (`permissionLevel`, joined with `familyUser`'s name and phone — see above); this is the other half, being able to act on what they see.
+
+**Request body** — every field optional, at least one required:
+
+| Field | Type |
+|---|---|
+| `permissionLevel` | `view`, `manage`, or `owner` |
+| `canViewLocation` | boolean |
+| `canManageContacts` | boolean |
+| `canManageCaregivers` | boolean |
+| `canAcknowledgeAlerts` | boolean |
+
+```json
+{ "permissionLevel": "view" }
+```
+
+**Response `200`** — the updated link, same shape as `POST /family/invites`.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | No fields sent, or a sent field is malformed |
+| `403` | `not_permitted` | The caller is not the elderly user this link belongs to — not even an `owner`-level family member may use this on someone else's behalf |
+| `404` | `link_not_found` | No link with that id |
+| `409` | `link_not_active` | The link is `pending` or `revoked` |
 
 ---
 
@@ -1319,6 +1396,855 @@ Any of `POST`'s content fields, including `priority` on its own — **there is n
 
 ---
 
+## Geofencing (Phase 3 step 3)
+
+A safe zone (or restricted zone) is a circle: a centre point and a radius, stored on `geofences` — no PostGIS, that is deliberate on the table itself. A breach is a real `alerts` row (`alertType: "geofence_breach"`), not a lighter-weight notification — it goes through the same `advanceFanout` escalation a fall alert does (full `emergency_contacts` list, every channel a contact opted into), just at `severity: "high"` rather than SOS's `"critical"`. It does **not** go through the family broadcast push tier — that stays SOS-only, same as it already was for fall alerts.
+
+**Where the check happens: the server, not the phone.** Every `POST /emergency/locations` write (background tracking's ~90s/75m-movement cadence, or a foreground mount) is compared against the caller's active zones right after it's stored. Detection latency is therefore bounded by however often a location reading arrives, not instant — the trade for not needing to sync zone definitions to the device or reach for OS-level geofencing.
+
+**Hysteresis.** A reading only counts as a transition if it disagrees with the *previous* stored `locations` row for that zone (sitting still near the boundary produces two identical classifications in a row, not a re-fire each time), and only if it clears the boundary by more than its own `accuracyMeters` (or 20m, if the reading has none). This absorbs ordinary GPS jitter at the edge of a zone without needing a state column on `geofences` itself — the same "derive, don't store" approach escalation progress already uses.
+
+**Auto-resolve on return.** A zone alerts in one direction (`alertOnExit` and/or `alertOnEnter`) and auto-resolves the opposite: leaving a zone you were alerted for *entering*, or returning to a zone you were alerted for *leaving*, both close out whatever active `geofence_breach` alert exists for that zone — `resolvedBy: null`, since nobody had to act. For the common safe-zone case (`alertOnExit: true`, the default) this means coming home closes the alert automatically.
+
+**Permission — reused from `family_links`, no new column.** Read (`GET`): the elderly user, or a family member with an active link and `canViewLocation: true` — a zone is location data, gated like any other. Write (`POST`/`PATCH`/`DELETE`): the same, plus `permissionLevel` `manage` or `owner` — the first real use of the `manage` tier, which existed in the enum but gated nothing until now. The elderly user can see who holds `manage`/`owner` via `GET /family/links` and step it back down via `PATCH /family/links/:id` without revoking the relationship outright — see above.
+
+### `POST /emergency/geofences`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `name` | string | **yes** | 1–100 characters |
+| `centerLatitude` | number | **yes** | -90 to 90 |
+| `centerLongitude` | number | **yes** | -180 to 180 |
+| `radiusMeters` | integer | **yes** | Positive whole number |
+| `elderlyUserId` | string (UUID) | required only if the caller is not the elderly user | Whose zone this is |
+| `alertOnExit` | boolean | no | Default `true` |
+| `alertOnEnter` | boolean | no | Default `false` |
+
+```json
+{ "name": "Home", "centerLatitude": 12.9716, "centerLongitude": 77.5946, "radiusMeters": 150 }
+```
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "geofence": {
+    "id": "7c9e6f3a-1234-4d5e-8f9a-0b1c2d3e4f5a",
+    "userId": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+    "name": "Home",
+    "centerLatitude": "12.971600",
+    "centerLongitude": "77.594600",
+    "radiusMeters": 150,
+    "fenceType": "safe_zone",
+    "alertOnExit": true,
+    "alertOnEnter": false,
+    "isActive": true,
+    "createdBy": "2e4fe1ff-3d66-4115-a3c1-a22aab445d96",
+    "createdAt": "2026-08-28T10:00:00.000Z",
+    "updatedAt": "2026-08-28T10:00:00.000Z"
+  }
+}
+```
+
+`createdBy` is separate from `userId` — a family member with `manage`/`owner` can create a zone for the elderly user, and `createdBy` is who actually did it. `fenceType` is always `"safe_zone"` — the column allows other values but nothing in this API defines what they'd mean yet, so it isn't a caller option.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | A field is missing/malformed, or `elderlyUserId` missing for a non-elderly caller |
+| `403` | `not_permitted` | Caller lacks `canViewLocation` + `manage`/`owner` on an active link to this elderly user |
+
+---
+
+### `GET /emergency/geofences`
+
+Active zones only, newest first.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `elderlyUserId` | required only if the caller is not the elderly user | |
+
+**Response `200`**
+
+```json
+{ "status": "ok", "count": 1, "geofences": [ { "...": "one zone, same shape as above" } ] }
+```
+
+**Errors:** `400 validation_failed` (missing `elderlyUserId` for a non-elderly caller), `403 not_permitted` (lacks `canViewLocation` on an active link).
+
+---
+
+### `PATCH /emergency/geofences/:id`
+
+Any of `POST`'s content fields, any subset — at least one required.
+
+**Response `200`** — the updated zone.
+
+**Errors**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `validation_failed` | No fields sent, or a sent field is malformed |
+| `403` | `not_permitted` | Caller lacks `canViewLocation` + `manage`/`owner` for this zone's elderly user |
+| `404` | `geofence_not_found` | No such zone, or it has been deleted |
+
+---
+
+### `DELETE /emergency/geofences/:id`
+
+**Soft delete** — sets `isActive: false`. Never a hard delete: `alerts.geofenceId` references this table, and a past breach alert needs a real row to say which zone it was about — a hard delete would `SET NULL` there and lose that. There is no undelete through this API, same as emergency contacts.
+
+**Response `200`** — the zone, now `isActive: false`.
+
+**Errors:** `403 not_permitted`, `404 geofence_not_found` (including a zone already deleted).
+
+---
+
+### `GET /emergency/geofences/:id/history`
+
+Recent inside/outside tally for one zone — the sanity check shown right after creating a zone ("you've been inside this zone for the last 3 days"), and reachable again later. Aggregated server-side from `locations` rows against this zone's circle; never returns the raw location trail itself.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `days` | no | Positive whole number, capped at 30. Default `3` |
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "history": {
+    "days": 3,
+    "sampleCount": 42,
+    "insideCount": 39,
+    "percentInside": 93,
+    "currentlyInside": true,
+    "oldestSampleAt": "2026-08-26T09:00:00.000Z",
+    "newestSampleAt": "2026-08-29T08:45:00.000Z"
+  }
+}
+```
+
+`sampleCount: 0` means no `locations` rows exist in the requested window — `percentInside` and `currentlyInside` are both `null` in that case, not `0`/`false`; the client shows "not enough recent location data yet," not a false reading of "never inside."
+
+**Errors:** `400 validation_failed` (`days` malformed), `403 not_permitted` (same gate as reading the zone itself), `404 geofence_not_found`.
+
+---
+
+### `GET /emergency/locations/latest`
+
+Most recent `locations` row for an elderly user, or `null` if they have none yet. Same permission gate as reading their geofences — a family member's own device position is never a stand-in for the elderly user's, so this is how the "use their last known location" zone-centre flow (Phase 3 step 3) gets a real point to work from instead of the caller's own GPS.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `elderlyUserId` | required only if the caller is not the elderly user | |
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "location": {
+    "id": "9b2e6f3a-...",
+    "userId": "2e4fe1ff-...",
+    "latitude": "12.971600",
+    "longitude": "77.594600",
+    "accuracyMeters": "11.00",
+    "batteryLevel": 82,
+    "source": "background_task",
+    "recordedAt": "2026-08-29T08:45:00.000Z",
+    "createdAt": "2026-08-29T08:45:03.000Z"
+  }
+}
+```
+
+`location: null` when nothing has been recorded for that user yet — the client blocks zone creation from this path rather than guessing a centre.
+
+**Errors:** `400 validation_failed` (missing `elderlyUserId` for a non-elderly caller), `403 not_permitted` (lacks `canViewLocation` on an active link).
+
+---
+
+## Caregiver Profiles, Search & Booking (Phase 2)
+
+A `caregivers` row is one-to-one with a `users` row of role `caregiver` (`caregivers.user_id UNIQUE`). Profile fields live on `caregivers`; name/email/phone are read live from the joined `users` row, not copied.
+
+**Permission model.** Booking write access (create a booking on someone's behalf) is gated the same way geofences and safe zones are: the elderly user themselves, or a family member with an active `family_links` row and `canManageCaregivers: true` (`hasManageCaregiversPermission`, `family/links.js`) — the same field `PATCH /family/links/:id` already grants/revokes, see "Family Links" above. Reading a specific booking is permitted for its elderly user, whoever booked it, the assigned caregiver, a `canManageCaregivers` family member, or admin. Confirming, rejecting, or marking a booking active/complete is caregiver/admin-only; cancelling is permitted for the elderly owner, whoever booked it, the assigned caregiver, or admin — not every linked family member, only the one who made that specific booking.
+
+### `POST /caregiver/profile`
+
+Creates the caller's profile if none exists, otherwise updates it (upsert) — every field is optional and omitting one leaves the existing value untouched.
+
+**Request body**
+
+| Field | Type | Rules |
+|---|---|---|
+| `bio` | string | |
+| `experienceYears` | integer | 0-70 |
+| `qualifications` | string | |
+| `specializations` | string[] | |
+| `languages` | string[] | |
+| `hourlyRate` | number | ≥ 0 |
+| `serviceAreaCity` | string | |
+| `isAvailable` | boolean | |
+
+`currency` is not a caller input — always `'INR'` server-side.
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "caregiver": {
+    "id": "7c9e6f3a-...",
+    "userId": "2e4fe1ff-...",
+    "fullName": "Asha Devi",
+    "email": null,
+    "phone": "+919876543210",
+    "profilePhotoUrl": null,
+    "bio": "10 years caring for elderly patients.",
+    "experienceYears": 10,
+    "qualifications": "Certified nursing assistant",
+    "specializations": ["Dementia care", "Post-surgery care"],
+    "languages": ["Hindi", "English"],
+    "hourlyRate": 250,
+    "currency": "INR",
+    "serviceAreaCity": "Bengaluru",
+    "idProofType": null,
+    "idVerified": false,
+    "verificationStatus": "pending",
+    "verifiedAt": null,
+    "verifiedBy": null,
+    "isAvailable": true,
+    "averageRating": 0,
+    "totalReviews": 0,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`.
+
+---
+
+### `GET /caregiver/profile/me`
+
+**Response `200`** — `{ "status": "ok", "caregiver": { "...": "same shape as above" } }`, or `"caregiver": null` before the caller has ever saved one.
+
+---
+
+### `GET /caregiver/search`
+
+Verified + available caregivers by default.
+
+**Query parameters**
+
+| Field | Rules |
+|---|---|
+| `city` | Substring match, case-insensitive |
+| `language` | Exact match against one entry in `languages`, case-insensitive |
+| `specialization` | Exact match against one entry in `specializations`, case-insensitive |
+| `minRating` | Number |
+| `verifiedOnly` | Default `true`; pass `false` to include unverified |
+| `availableOnly` | Default `true`; pass `false` to include unavailable |
+| `page` | Default `1` |
+| `limit` | Default `20` |
+
+**Response `200`**
+
+```json
+{ "status": "ok", "total": 1, "page": 1, "limit": 20, "caregivers": [ { "...": "same shape as POST /caregiver/profile" } ] }
+```
+
+---
+
+### `GET /caregiver/:id`
+
+One caregiver's full profile — no restriction beyond being signed in.
+
+**Response `200`** — `{ "status": "ok", "caregiver": { "..." } }`. **Errors:** `404 caregiver_not_found`.
+
+---
+
+### `POST /caregiver/bookings`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `elderlyUserId` | UUID | **yes** | Who the booking is for |
+| `caregiverId` | UUID | **yes** | Must exist |
+| `startDate` | string | **yes** | `YYYY-MM-DD` |
+| `endDate` | string | no | `YYYY-MM-DD`, not before `startDate` |
+| `recurrence` | string | no | `one_time` (default) \| `daily` \| `weekly` \| `monthly` |
+| `hoursPerVisit` | number | no | 0-24 |
+| `agreedRate` | number | no | ≥ 0 |
+| `specialInstructions` | string | no | |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "booking": {
+    "id": "9b2e6f3a-...",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "elderlyPhone": "+919876543210",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "caregiverPhone": "+919876500000",
+    "bookedByUserId": "2e4fe1ff-...",
+    "bookedByName": "Ramesh Kumar",
+    "status": "requested",
+    "startDate": "2026-09-15",
+    "endDate": null,
+    "recurrence": "weekly",
+    "hoursPerVisit": 4,
+    "agreedRate": null,
+    "currency": "INR",
+    "specialInstructions": null,
+    "cancellationReason": null,
+    "cancelledBy": null,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted` (caller lacks `canManageCaregivers` for `elderlyUserId`), `404 caregiver_not_found`.
+
+---
+
+### `GET /caregiver/bookings`
+
+The caller's own bookings — elderly sees their own, family sees ones they booked plus every active linked elderly user's, caregiver sees ones assigned to them, admin sees all.
+
+**Query parameters:** `status` (optional, one of `requested`/`confirmed`/`active`/`completed`/`cancelled`/`rejected`).
+
+**Response `200`** — `{ "status": "ok", "count": 1, "bookings": [ { "...": "same shape as above" } ] }`.
+
+---
+
+### `GET /caregiver/bookings/:id`
+
+**Response `200`** — the booking. **Errors:** `403 not_permitted`, `404 booking_not_found`.
+
+---
+
+### `PATCH /caregiver/bookings/:id/status`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `status` | string | **yes** | `requested` \| `confirmed` \| `active` \| `completed` \| `cancelled` \| `rejected` |
+| `cancellationReason` | string | no | Only meaningful when `status: "cancelled"` |
+
+**Who may make which transition:**
+
+| Transition | Permitted |
+|---|---|
+| → `confirmed` / `rejected` | Assigned caregiver, or admin |
+| → `active` / `completed` | Assigned caregiver, or admin |
+| → `cancelled` | Elderly owner, whoever booked it, the assigned caregiver, or admin |
+
+**Response `200`** — the updated booking.
+
+**Errors:** `400 validation_failed`, `403 not_authorized` (wrong actor for this transition), `404 booking_not_found`.
+
+---
+
+## Caregiver Scheduling & Attendance (Phase 2)
+
+A `schedules` row is one visit slot, created from a confirmed booking; an `attendance` row is one-to-one with it (`attendance.schedule_id UNIQUE`), auto-created in `pending` status the moment the schedule is. `GET /caregiver/schedules` and `GET /caregiver/schedules/:id` embed that linked attendance row's `id`/`status`/`check_in_at`/`check_out_at` directly on the schedule response (`attendanceId`, `attendanceStatus`, `checkInAt`, `checkOutAt`) — a schedule list gives both in one fetch; there is no need to also call `GET /caregiver/attendance` just to show attendance state next to a list of visits.
+
+**`POST /caregiver/schedules` does not check that the booking it's created from is `confirmed`.** Nothing server-side stops a schedule being created against a `requested`, `cancelled`, or `rejected` booking — the only gate is client-side: the app only offers "Schedule Visit" on a booking whose `status` is `confirmed`. Treat this as a real gap if a second client integrates against this endpoint directly.
+
+**Permission model — schedules.** Create and read/write access are the same set: the elderly user themselves, the assigned caregiver (`isAssignedCaregiver`, `caregiver/services/authorize.js`), a family member with `hasManageCaregiversPermission`, or admin.
+
+**Permission model — attendance.** Check-in/check-out: the assigned caregiver, or admin — nobody else, not even the elderly user or family, can record attendance on a caregiver's behalf. Verify (`PATCH /caregiver/attendance/:id/verify`): the elderly user themselves, a family member with `hasManageCaregiversPermission`, or admin — **the assigned caregiver is deliberately excluded**, since a caregiver verifying their own attendance defeats the point of an independent confirmation.
+
+**Known gap: no accuracy field, no distance validation on check-in/out.** Unlike `POST /emergency/locations`, the attendance endpoints accept `latitude`/`longitude` with no `accuracyMeters` and do nothing to confirm the coordinates are anywhere near the elderly user's address — whatever is sent is stored as-is. A caregiver could in principle check in from anywhere. Not fixed here; see `BUILD_LOG.md`, 2026-08-29.
+
+### `POST /caregiver/schedules`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `bookingId` | UUID | **yes** | |
+| `caregiverId` | UUID | **yes** | |
+| `elderlyUserId` | UUID | **yes** | |
+| `visitDate` | string | **yes** | `YYYY-MM-DD` |
+| `startTime` | string | **yes** | `HH:MM` or `HH:MM:SS` |
+| `endTime` | string | **yes** | `HH:MM` or `HH:MM:SS`, must be after `startTime` — same calendar day only, a visit cannot span midnight today |
+| `notes` | string | no | |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "schedule": {
+    "id": "3f1e2a9b-...",
+    "bookingId": "9b2e6f3a-...",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "caregiverPhone": "+919876500000",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "elderlyPhone": "+919876543210",
+    "visitDate": "2026-09-15",
+    "startTime": "09:00:00",
+    "endTime": "11:00:00",
+    "status": "scheduled",
+    "notes": null,
+    "attendanceId": "8a4c1d2e-...",
+    "attendanceStatus": "pending",
+    "checkInAt": null,
+    "checkOutAt": null,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`, `409 schedule_conflict` (this caregiver already has a slot the same day whose time range overlaps the requested one — checked per caregiver, not per elderly user, so the same caregiver cannot be double-booked even across two different families).
+
+---
+
+### `GET /caregiver/schedules`
+
+Scoped server-side same as bookings: elderly sees their own, family sees their own plus every active linked elderly user's, caregiver sees their own assigned slots, admin sees all.
+
+**Query parameters (all optional):** `caregiverId`, `elderlyUserId`, `startDate`, `endDate` (both `YYYY-MM-DD`), `status` (`scheduled`/`completed`/`missed`/`cancelled`/`rescheduled`).
+
+**Response `200`** — `{ "status": "ok", "count": 1, "schedules": [ { "...": "same shape as above" } ] }`, ordered by `visitDate` then `startTime` ascending.
+
+---
+
+### `GET /caregiver/schedules/:id`
+
+**Response `200`** — the schedule. **Errors:** `403 not_permitted`, `404 schedule_not_found`.
+
+---
+
+### `PATCH /caregiver/schedules/:id`
+
+Changes a slot's own status directly (e.g. `missed`, `cancelled`, `rescheduled`) — not how a visit gets marked `completed` day-to-day, which happens automatically the moment check-out is recorded (see below).
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `status` | string | **yes** | `scheduled` \| `completed` \| `missed` \| `cancelled` \| `rescheduled` |
+| `notes` | string | no | |
+
+**Response `200`** — the updated schedule. **Errors:** `400 validation_failed`, `403 not_permitted`, `404 schedule_not_found`.
+
+---
+
+### `POST /caregiver/attendance/schedules/:scheduleId/check-in`
+
+Assigned caregiver or admin only. Upserts the schedule's attendance row to `checked_in` with the current timestamp — safe to call again before checking out (a re-check-in just overwrites the time and coordinates).
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `latitude` | number | no | -90 to 90 |
+| `longitude` | number | no | -180 to 180 |
+| `notes` | string | no | |
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "attendance": {
+    "id": "8a4c1d2e-...",
+    "scheduleId": "3f1e2a9b-...",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "caregiverPhone": "+919876500000",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "visitDate": "2026-09-15",
+    "startTime": "09:00:00",
+    "endTime": "11:00:00",
+    "checkInAt": "2026-09-15T09:02:11.000Z",
+    "checkInLatitude": 12.971599,
+    "checkInLongitude": 77.594566,
+    "checkOutAt": null,
+    "checkOutLatitude": null,
+    "checkOutLongitude": null,
+    "durationMinutes": null,
+    "status": "checked_in",
+    "verifiedByFamily": false,
+    "notes": null,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-09-15T09:02:11.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_authorized` (caller is not the assigned caregiver), `404 schedule_not_found`.
+
+---
+
+### `POST /caregiver/attendance/schedules/:scheduleId/check-out`
+
+Assigned caregiver or admin only. Sets `checkOutAt`, computes `durationMinutes` from the stored `checkInAt` (minimum 1), sets attendance `status: "checked_out"`, and — as a side effect — sets the schedule's own `status` to `"completed"`.
+
+**Request body** — same shape as check-in.
+
+**Response `200`** — the attendance record, same shape as check-in's response with `checkOutAt`/`checkOutLatitude`/`checkOutLongitude`/`durationMinutes` populated and `status: "checked_out"`.
+
+**Errors:** `400 validation_failed`, `400 not_checked_in` (no check-in recorded yet for this schedule), `403 not_authorized`, `404 schedule_not_found`.
+
+---
+
+### `PATCH /caregiver/attendance/:id/verify`
+
+Sets `verifiedByFamily: true`. Elderly self, family with `hasManageCaregiversPermission`, or admin — never the caregiver themselves. Idempotent: verifying an already-verified record re-sets the same flag, no error.
+
+**Response `200`** — the attendance record. **Errors:** `403 not_permitted`, `404 attendance_not_found`.
+
+---
+
+### `GET /caregiver/attendance`
+
+Scoped server-side the same way as `GET /caregiver/schedules`.
+
+**Query parameters (all optional):** `caregiverId`, `elderlyUserId`, `status` (`pending`/`checked_in`/`checked_out`/`absent`/`late`).
+
+**Response `200`** — `{ "status": "ok", "count": 1, "attendance": [ { "...": "same shape as check-in's response" } ] }`, newest-created first.
+
+---
+
+### `GET /caregiver/attendance/:id`
+
+**Response `200`** — the attendance record. **Errors:** `403 not_permitted`, `404 attendance_not_found`.
+
+---
+
+## Care Plans (Phase 4)
+
+A `care_plans` row is medical information for one elderly user: conditions, allergies, medications, mobility/dietary notes, emergency instructions. An elderly user can have more than one — `status` (`draft`/`active`/`archived`) makes this a history, not a single record; `GET /caregiver/care-plans/elderly/:elderlyUserId` returns all of them, newest first.
+
+**Permission model — and there is no view-only tier.** Write (create/update) is the elderly user themselves, a family member with `hasManageCaregiversPermission` (`family/links.js`), or admin. Read is that same set, **plus** a caregiver with a real assignment to the elderly user (`caregiverHasAssignmentWith`, `caregiver/services/authorize.js` — a confirmed/active/completed booking, or a schedule; being findable in search alone grants nothing). Unlike geofences, there is no separate "can view but not manage" split for family here: `hasManageCaregiversPermission` is one flag that gates both read and write identically, so a family member who can see a care plan can always also edit it. The only viewer who is genuinely read-only is a caregiver — `POST`/`PATCH` both exclude that role at the route's `requireRole` gate, not just at the permission-function level. A family member without `can_manage_caregivers` gets `403` on read too, same as write — there is no way today to grant "can see the allergy list, can't change it" to a family member. Worth revisiting; not attempted here. See `BUILD_LOG.md`.
+
+### `POST /caregiver/care-plans`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `elderlyUserId` | UUID | **yes** | |
+| `title` | string | **yes** | 1-150 chars |
+| `description` | string | no | |
+| `medicalConditions` | string | no | |
+| `allergies` | string | no | |
+| `medications` | string | no | |
+| `dietaryNotes` | string | no | |
+| `mobilityNotes` | string | no | |
+| `emergencyInstructions` | string | no | |
+| `startDate` | string | no | `YYYY-MM-DD` |
+| `endDate` | string | no | `YYYY-MM-DD`, not before `startDate` |
+| `status` | string | no | `draft` \| `active` \| `archived`, defaults to `active` |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "carePlan": {
+    "id": "6e2a1f3c-...",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "createdByUserId": "2e4fe1ff-...",
+    "createdByName": "Ramesh Kumar",
+    "title": "Ramesh's ongoing care plan",
+    "description": null,
+    "medicalConditions": "Type 2 diabetes, hypertension",
+    "allergies": "Penicillin",
+    "medications": "Metformin 500mg twice daily",
+    "dietaryNotes": "Low sodium",
+    "mobilityNotes": "Uses a walker",
+    "emergencyInstructions": "Call daughter first, then 108",
+    "startDate": null,
+    "endDate": null,
+    "status": "active",
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`.
+
+---
+
+### `GET /caregiver/care-plans/elderly/:elderlyUserId`
+
+**Query parameters:** `status` (optional, one of `draft`/`active`/`archived`).
+
+**Response `200`** — `{ "status": "ok", "count": 1, "carePlans": [ { "...": "same shape as above" } ] }`, newest-created first. **Errors:** `403 not_permitted`.
+
+---
+
+### `GET /caregiver/care-plans/:id`
+
+**Response `200`** — the care plan. **Errors:** `403 not_permitted`, `404 care_plan_not_found`.
+
+---
+
+### `PATCH /caregiver/care-plans/:id`
+
+Every field optional, at least one required. Same shape and rules as create, minus `elderlyUserId` (not editable — a care plan does not change whose it is).
+
+**Response `200`** — the updated care plan. **Errors:** `400 validation_failed` (including a bad `status` value — the enum cast is caught by the validator, not left to surface as a raw database error), `403 not_permitted`, `404 care_plan_not_found`.
+
+---
+
+## Tasks (Phase 4)
+
+A `tasks` row is one to-do item for an elderly user, optionally assigned to a caregiver and/or tied to a `carePlanId` / `scheduleId`.
+
+**Permission model.** Create: the elderly user themselves, a family member with `hasManageCaregiversPermission`, admin, **or the caregiver being assigned to it, self-assigning only** — `assignedToCaregiverId` must resolve to the caller's own caregiver profile (`isAssignedCaregiver`, checked against the caller). A caregiver cannot assign a task to a different caregiver, or create one with no `assignedToCaregiverId` at all (that branch of `requireTaskCreatePermission` only fires when `assignedToCaregiverId` is present). Read and status updates share one permission function: the elderly user, the assigned caregiver, `hasManageCaregiversPermission` family, or admin.
+
+### `POST /caregiver/tasks`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `elderlyUserId` | UUID | **yes** | |
+| `carePlanId` | UUID | no | |
+| `assignedToCaregiverId` | UUID | no | |
+| `scheduleId` | UUID | no | |
+| `title` | string | **yes** | 1-150 chars |
+| `description` | string | no | |
+| `category` | string | no | |
+| `priority` | string | no | `low` \| `normal` \| `high`, defaults to `normal` |
+| `dueDate` | string | no | `YYYY-MM-DD` |
+| `dueTime` | string | no | `HH:MM` or `HH:MM:SS` |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "task": {
+    "id": "4c7a1e2b-...",
+    "carePlanId": null,
+    "carePlanTitle": null,
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "assignedToCaregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "assignedByUserId": "2e4fe1ff-...",
+    "assignedByName": "Ramesh Kumar",
+    "scheduleId": "3f1e2a9b-...",
+    "title": "Give afternoon medication",
+    "description": null,
+    "category": null,
+    "priority": "normal",
+    "dueDate": null,
+    "dueTime": null,
+    "recurrence": "none",
+    "status": "pending",
+    "completedAt": null,
+    "completedBy": null,
+    "completedByName": null,
+    "completionNotes": null,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`.
+
+---
+
+### `GET /caregiver/tasks`
+
+**Query parameters (all optional):** `caregiverId`, `elderlyUserId`, `carePlanId`, `scheduleId`, `status` (`pending`/`in_progress`/`completed`/`skipped`/`cancelled`), `dueDate`.
+
+**Response `200`** — `{ "status": "ok", "count": 1, "tasks": [ { "...": "same shape as above" } ] }`, ordered by due date/time ascending (nulls last), then newest-created first.
+
+---
+
+### `GET /caregiver/tasks/:id`
+
+**Response `200`** — the task. **Errors:** `403 not_permitted`, `404 task_not_found`.
+
+---
+
+### `PATCH /caregiver/tasks/:id/status`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `status` | string | **yes** | `pending` \| `in_progress` \| `completed` \| `skipped` \| `cancelled` |
+| `completionNotes` | string | no | |
+
+Setting `status: "completed"` stamps `completedAt`/`completedBy` server-side; any other status leaves those columns as they were.
+
+**Response `200`** — the updated task. **Errors:** `400 validation_failed`, `403 not_permitted`, `404 task_not_found`.
+
+---
+
+## Activity Reports (Phase 4)
+
+An `activity_reports` row is one caregiver's account of one visit: a required `summary`, plus optional meals/medications/mood/sleep/concerns. **`vitals` (JSONB) and `photoUrls` (array of URLs) exist as columns but have no client anywhere in this app that can populate them** — no vitals-entry UI and no file upload exist. Every report created through this app is qualitative text only. Flagged for whoever owns the product spec next; not attempted here. See `BUILD_LOG.md`.
+
+**One report per caregiver, per elderly user, per calendar day** — `uq_report_per_day UNIQUE (caregiver_id, elderly_user_id, report_date)`. This is a real data-model limitation, not a client-side rule: if the same caregiver has two separate visits with the same elderly user on the same day, the second `POST` 409s as `duplicate_report` regardless of which `scheduleId` it names. There is also no `scheduleId` filter on `GET /caregiver/reports` — a report is looked up by `caregiverId` + `elderlyUserId` + date range, the same key the uniqueness constraint uses, not by which visit it came from.
+
+**Permission model.** Create: the caregiver named in `caregiverId` must be the caller's own profile, or admin — never on another caregiver's behalf. Read: the elderly user, the reporting caregiver, `hasManageCaregiversPermission` family, or admin.
+
+### `POST /caregiver/reports`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `caregiverId` | UUID | **yes** | Must be the caller's own caregiver profile |
+| `elderlyUserId` | UUID | **yes** | |
+| `scheduleId` | UUID | no | |
+| `carePlanId` | UUID | no | |
+| `reportDate` | string | **yes** | `YYYY-MM-DD` |
+| `summary` | string | **yes** | |
+| `mealsTaken` | string | no | |
+| `medicationsGiven` | string | no | |
+| `mood` | string | no | |
+| `sleepHours` | number | no | 0-24 |
+| `concerns` | string | no | |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "report": {
+    "id": "9d3f2c1a-...",
+    "scheduleId": "3f1e2a9b-...",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "caregiverPhone": "+919876500000",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "carePlanId": null,
+    "carePlanTitle": null,
+    "reportDate": "2026-09-15",
+    "summary": "Pleasant afternoon, took a short walk, ate well.",
+    "mealsTaken": "Lunch and a snack",
+    "medicationsGiven": "Metformin at 2pm",
+    "mood": "Cheerful",
+    "sleepHours": null,
+    "vitals": null,
+    "concerns": null,
+    "photoUrls": [],
+    "createdAt": "2026-09-15T14:30:00.000Z",
+    "updatedAt": "2026-09-15T14:30:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`, `409 duplicate_report`.
+
+---
+
+### `GET /caregiver/reports`
+
+**Query parameters (all optional):** `elderlyUserId`, `caregiverId`, `startDate`, `endDate`.
+
+**Response `200`** — `{ "status": "ok", "count": 1, "reports": [ { "...": "same shape as above" } ] }`, newest report-date first.
+
+---
+
+### `GET /caregiver/reports/:id`
+
+**Response `200`** — the report. **Errors:** `403 not_permitted`, `404 report_not_found`.
+
+---
+
+## Reviews (Phase 4)
+
+A `reviews` row is a 1-5 star rating (plus optional punctuality/care-quality/communication sub-ratings and a comment) tied to one completed booking. **There is no `PATCH` endpoint** — `uq_review_per_booking UNIQUE (booking_id, reviewer_user_id)` makes a review create-once by design, not an editable draft.
+
+**Permission model.** The booking named by `bookingId` is looked up server-side (never trusted from the client) and must belong to the `caregiverId` being reviewed and have `status: "completed"` — a review cannot be left about a caregiver with no completed history, and `elderlyUserId` is derived from that booking, not accepted from the request body. Permitted reviewers: the booking's elderly user, whoever made the booking, a family member with `hasManageCaregiversPermission` for that elderly user, or admin.
+
+Submitting a review also recalculates `caregivers.average_rating`/`total_reviews` from all `is_visible = true` reviews for that caregiver, in the same request.
+
+### `POST /caregiver/reviews`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `caregiverId` | UUID | **yes** | |
+| `bookingId` | UUID | **yes** | Must be `completed`, and with this caregiver |
+| `rating` | integer | **yes** | 1-5 |
+| `punctualityRating` | integer | no | 1-5 |
+| `careQualityRating` | integer | no | 1-5 |
+| `communicationRating` | integer | no | 1-5 |
+| `comment` | string | no | |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "review": {
+    "id": "5b8e0d3f-...",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "bookingId": "9b2e6f3a-...",
+    "reviewerUserId": "2e4fe1ff-...",
+    "reviewerName": "Ramesh Kumar",
+    "elderlyUserId": "2e4fe1ff-...",
+    "rating": 5,
+    "punctualityRating": 5,
+    "careQualityRating": 5,
+    "communicationRating": 4,
+    "comment": "Very attentive and punctual.",
+    "isVisible": true,
+    "createdAt": "2026-09-20T09:00:00.000Z",
+    "updatedAt": "2026-09-20T09:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`, `404 booking_not_found`, `409 booking_not_eligible` (wrong caregiver, or not `completed`), `409 duplicate_review`.
+
+---
+
+### `GET /caregiver/reviews/caregiver/:caregiverId`
+
+**Response `200`** — `{ "status": "ok", "count": 1, "reviews": [ { "...": "same shape as above" } ] }`, visible reviews only, newest first.
+
+---
+
+### `GET /caregiver/reviews/:id`
+
+**Response `200`** — the review. **Errors:** `404 review_not_found`.
+
+---
+
 ## Known limitations
 
 **Pre-registration invites do not work.** `POST /family/invites` can only invite someone who has already registered an account — the invitee is looked up by phone, and an unregistered number returns `404 invitee_not_registered`. For real users this is the common case, not an edge case: a daughter installs the app for her mother, then wants to invite a brother who has nothing installed yet. Today he has to register first, then be invited. Building pre-registration invites (an invite record keyed on a phone number rather than a user id, resolved and turned into a real `family_links` row the moment that phone number registers) is a real feature, not a quick fix — it needs its own table or a nullable `family_user_id`, a way to notify the inviter once the invite resolves, and a decision on how long an unclaimed invite stays valid. Not attempted here.
@@ -1336,13 +2262,15 @@ Everything below is planned but does not exist. Do not code against it — it wi
 | Area | Phase | Owner |
 |---|---|---|
 | Caregiver profiles, search, booking, scheduling, attendance | 2 | [Teammate B] |
-| Geofences, breach detection, live location over WebSockets | 3 | Sree |
+| Live location over WebSockets, map UI for zones and breaches | 3 | Sree |
 | Care plans, activity reports, tasks, reviews | 4 | [Teammate B] |
 | Ambulance booking, disaster alerts, response centre, fall trigger | 5 | [Teammate C] |
 | Pre-registration invites (invite someone with no account yet) | 1 | Sree |
 | Keeping the emergency-contact copy fresh after a linked account changes | 1 | Sree |
 | Undeleting a soft-deleted emergency contact | 1 | Sree |
+| Owner-tier family member editing another family member's permissions (`PATCH /family/links/:id` is elderly-only today) | 1 | Sree |
+| On-device (OS-level) geofencing for instant detection — today's check runs server-side on each location write, bounded by tracking cadence | 3 | Sree |
 
-**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above. `POST /family/invites`, `POST /family/invites/:id/accept`, `POST /family/invites/:id/decline`, `POST /family/links/:id/revoke`, `GET /family/links`, `POST /family/links/:id/emergency-contact` — see "Family Links" above. `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id` — see "Emergency Contacts" above. The family broadcast push tier — see "Notification channels and escalation" above.
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above. `POST /family/invites`, `POST /family/invites/:id/accept`, `POST /family/invites/:id/decline`, `POST /family/links/:id/revoke`, `GET /family/links`, `POST /family/links/:id/emergency-contact`, `PATCH /family/links/:id` — see "Family Links" above. `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id` — see "Emergency Contacts" above. `POST /emergency/geofences`, `GET /emergency/geofences`, `PATCH /emergency/geofences/:id`, `DELETE /emergency/geofences/:id`, `GET /emergency/geofences/:id/history`, `GET /emergency/locations/latest`, and server-side breach detection with auto-resolve-on-return — see "Geofencing" above. The family broadcast push tier — see "Notification channels and escalation" above.
 
 `family_links` and `emergency_contacts` rows both must still be created directly (no management endpoints for either yet) — same situation, same reason: nothing in this step needed one, so nothing was built ahead of being asked for. See `backend/scripts/seed-test-users.js` for how development data gets in either table today.

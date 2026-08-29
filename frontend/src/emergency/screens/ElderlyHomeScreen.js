@@ -458,6 +458,130 @@ export function ElderlyHomeScreen({ navigation }) {
                 </Pressable>
               </View>
 
+              {/* Family & Contacts Section */}
+              <View style={styles.actionCardsSection}>
+                <Text style={styles.sectionHeading}>Family & Contacts</Text>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.familyCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('ManageFamily')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Who Can See You"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#EDE9FE' }]}>
+                    <Text style={styles.cardIconText}>👀</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#6D28D9' }]}>Who Can See You</Text>
+                    <Text style={styles.cardSubtitle}>See who has access, and invite family</Text>
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.contactsCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('EmergencyContacts')}
+                  accessibilityRole="button"
+                  accessibilityLabel="People to Call in an Emergency"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#FFE4E6' }]}>
+                    <Text style={styles.cardIconText}>📇</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#BE123C' }]}>People to Call in an Emergency</Text>
+                    <Text style={styles.cardSubtitle}>Your emergency call list, in order</Text>
+                  </View>
+                </Pressable>
+              </View>
+
+              {/* Caregivers Section */}
+              <View style={styles.actionCardsSection}>
+                <Text style={styles.sectionHeading}>Caregivers</Text>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.caregiverSearchCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('CaregiverSearch', {})}
+                  accessibilityRole="button"
+                  accessibilityLabel="Find a Caregiver"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#F0FDFA' }]}>
+                    <Text style={styles.cardIconText}>🔍</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#0F766E' }]}>Find a Caregiver</Text>
+                    <Text style={styles.cardSubtitle}>Search by city, language and specialization</Text>
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.caregiverBookingsCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('Bookings')}
+                  accessibilityRole="button"
+                  accessibilityLabel="My Caregiver Bookings"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#FDF4FF' }]}>
+                    <Text style={styles.cardIconText}>📋</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#A21CAF' }]}>My Bookings</Text>
+                    <Text style={styles.cardSubtitle}>Requests, confirmed and past visits</Text>
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.caregiverVisitsCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('Visits')}
+                  accessibilityRole="button"
+                  accessibilityLabel="My Visits"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#ECFDF5' }]}>
+                    <Text style={styles.cardIconText}>🗓️</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#047857' }]}>My Visits</Text>
+                    <Text style={styles.cardSubtitle}>Scheduled visits and attendance status</Text>
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.carePlanCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('CarePlan', {})}
+                  accessibilityRole="button"
+                  accessibilityLabel="My Care Plan"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#FEF3C7' }]}>
+                    <Text style={styles.cardIconText}>📋</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#B45309' }]}>My Care Plan</Text>
+                    <Text style={styles.cardSubtitle}>Conditions, allergies, medications and notes</Text>
+                  </View>
+                </Pressable>
+              </View>
+
               {/* Location & Tracking Controls */}
               <View style={styles.locationSection}>
                 <Text style={styles.sectionHeading}>Location & Safety Sharing</Text>
@@ -471,6 +595,25 @@ export function ElderlyHomeScreen({ navigation }) {
                   onEnable={handleEnableTracking}
                   onDisable={handleDisableTracking}
                 />
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.zonesCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('Geofences')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Safe Zones"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#ECFEFF' }]}>
+                    <Text style={styles.cardIconText}>📍</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#0E7490' }]}>Safe Zones</Text>
+                    <Text style={styles.cardSubtitle}>Get alerted if you leave or enter a place</Text>
+                  </View>
+                </Pressable>
               </View>
             </>
           )}
@@ -831,6 +974,34 @@ const styles = StyleSheet.create({
   disasterCard: {
     backgroundColor: '#EFF6FF',
     borderColor: colors.primary,
+  },
+  familyCard: {
+    backgroundColor: '#F5F3FF',
+    borderColor: '#6D28D9',
+  },
+  contactsCard: {
+    backgroundColor: '#FFF1F2',
+    borderColor: '#BE123C',
+  },
+  zonesCard: {
+    backgroundColor: '#ECFEFF',
+    borderColor: '#0E7490',
+  },
+  caregiverSearchCard: {
+    backgroundColor: '#F0FDFA',
+    borderColor: '#0F766E',
+  },
+  caregiverBookingsCard: {
+    backgroundColor: '#FDF4FF',
+    borderColor: '#A21CAF',
+  },
+  caregiverVisitsCard: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#047857',
+  },
+  carePlanCard: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#B45309',
   },
   cardIconBadge: {
     width: 46,

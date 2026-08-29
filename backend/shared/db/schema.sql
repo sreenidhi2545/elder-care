@@ -603,6 +603,31 @@ CREATE TRIGGER trg_reviews_updated_at
     BEFORE UPDATE ON reviews
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- Keeps caregivers.average_rating/total_reviews correct under any write to
+-- `reviews` — an insert, a rating edit, an is_visible hide, a delete — without
+-- the application having to remember to recalculate. See BUILD_LOG.md,
+-- "caregivers.average_rating/total_reviews", for why this replaced the
+-- application-level recalculation that used to be the only thing doing this.
+CREATE OR REPLACE FUNCTION recalc_caregiver_rating()
+RETURNS TRIGGER AS $$
+DECLARE
+    affected_caregiver_id UUID := COALESCE(NEW.caregiver_id, OLD.caregiver_id);
+BEGIN
+    UPDATE caregivers
+       SET average_rating = COALESCE(
+             (SELECT ROUND(AVG(rating), 2) FROM reviews WHERE caregiver_id = affected_caregiver_id AND is_visible = TRUE),
+             0
+           ),
+           total_reviews = (SELECT COUNT(*) FROM reviews WHERE caregiver_id = affected_caregiver_id AND is_visible = TRUE)
+     WHERE id = affected_caregiver_id;
+    RETURN NULL; -- AFTER trigger; return value is ignored
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_reviews_recalc_caregiver_rating
+    AFTER INSERT OR UPDATE OR DELETE ON reviews
+    FOR EACH ROW EXECUTE FUNCTION recalc_caregiver_rating();
+
 -- ============================================================================
 -- End of schema. 19 tables, 17 enum types.
 -- ============================================================================

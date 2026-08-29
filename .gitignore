@@ -42,3 +42,8 @@ Thumbs.db
 
 # Generated presentation decks
 ElderCare_Progress_Presentation.pdf
+.agents/
+skills-lock.json
+/package-lock.json
+*.jpeg
+*.jpg

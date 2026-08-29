@@ -20,7 +20,7 @@ import { useAuth } from '../auth/AuthContext';
 import { API_URL } from '../config';
 import { colors, spacing, type } from './theme';
 
-export function PlaceholderScreen({ title, subtitle, comingSoon = [] }) {
+export function PlaceholderScreen({ title, subtitle, comingSoon = [], actions = [] }) {
   const { user, signOut } = useAuth();
   const [backend, setBackend] = useState({ state: 'checking' });
 
@@ -65,6 +65,22 @@ export function PlaceholderScreen({ title, subtitle, comingSoon = [] }) {
             <Text style={styles.secondaryButtonText}>Check again</Text>
           </Pressable>
         </View>
+
+        {actions.length > 0 && (
+          <View style={styles.card}>
+            {actions.map((action) => (
+              <Pressable
+                key={action.label}
+                style={styles.actionButton}
+                onPress={action.onPress}
+                accessibilityRole="button"
+                accessibilityLabel={action.label}
+              >
+                <Text style={styles.actionButtonText}>{action.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
 
         {comingSoon.length > 0 && (
           <View style={styles.card}>
@@ -123,6 +139,13 @@ const styles = StyleSheet.create({
   spinner: { alignSelf: 'flex-start' },
   secondaryButton: { paddingVertical: spacing.sm },
   secondaryButtonText: { fontSize: type.body, color: colors.primary, fontWeight: '600' },
+  actionButton: {
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+  },
+  actionButtonText: { fontSize: type.body, fontWeight: '700', color: '#FFFFFF' },
   signOutButton: {
     backgroundColor: colors.surface,
     borderRadius: 12,

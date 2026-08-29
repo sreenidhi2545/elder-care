@@ -145,6 +145,66 @@ export async function createFallAlert(userId, location, message) {
   return rows[0];
 }
 
+// Fall is 'high'; SOS is 'critical' and only the SOS button itself ever
+// writes that. A geofence breach sits at the same tier as a fall — real and
+// worth a full contact escalation, but not the button-press-level urgency
+// SOS means.
+const GEOFENCE_BREACH_SEVERITY = 'high';
+
+/**
+ * Creates a geofence-breach alert. `direction` ('exit' or 'enter') is folded
+ * straight into `message` for the notification templates and the dashboard
+ * rather than a new column — geofenceCheck.js is the only caller, and it
+ * already knows which direction fired; nothing else needs to ask "which
+ * direction" as a separate query later.
+ */
+export async function createGeofenceAlert(userId, geofenceId, direction, geofenceName, location) {
+  const message =
+    direction === 'exit' ? `Left the safe zone "${geofenceName}".` : `Entered the zone "${geofenceName}".`;
+
+  const { rows } = await query(
+    `INSERT INTO alerts (
+       user_id, alert_type, status, severity, geofence_id, message, triggered_at,
+       latitude, longitude, location_accuracy_meters
+     )
+     VALUES ($1, 'geofence_breach', 'active', $2, $3, $4, now(), $5, $6, $7)
+     RETURNING *`,
+    [
+      userId,
+      GEOFENCE_BREACH_SEVERITY,
+      geofenceId,
+      message,
+      location.latitude,
+      location.longitude,
+      location.accuracyMeters ?? null,
+    ]
+  );
+  return rows[0];
+}
+
+/**
+ * Auto-resolve on return — the system, not a person, closes the loop once
+ * the elderly user is back where a still-active geofence_breach alert says
+ * they shouldn't be. `resolved_by` stays NULL: it references `users`, there
+ * is no "system" row to point at, and NULL already reads correctly here —
+ * nobody had to act for this to close. Matches on `geofence_id` and status
+ * alone, same atomic-update-as-guard shape as closeActiveAlert above: at
+ * most one active geofence_breach alert should exist per zone at a time, so
+ * there is nothing to disambiguate by picking "the latest" one.
+ */
+export async function autoResolveGeofenceAlert(geofenceId) {
+  const { rows } = await query(
+    `UPDATE alerts
+        SET status = 'resolved',
+            resolved_at = now(),
+            resolution_notes = 'Returned to the zone — resolved automatically.'
+      WHERE geofence_id = $1 AND alert_type = 'geofence_breach' AND status = 'active'
+      RETURNING *`,
+    [geofenceId]
+  );
+  return rows[0] ?? null;
+}
+
 /** The caller's own alerts, newest first. */
 export async function listAlertsForUser(userId, { status, limit }) {
   if (status) {
