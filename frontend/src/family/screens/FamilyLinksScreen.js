@@ -186,6 +186,21 @@ export function FamilyLinksScreen({ navigation }) {
               {link.canViewLocation && (
                 <Pressable
                   onPress={() =>
+                    navigation.navigate('SafetyStatus', {
+                      elderlyUserId: link.elderlyUserId,
+                      elderlyName: link.elderlyUser?.fullName || null,
+                    })
+                  }
+                  accessibilityRole="button"
+                  style={styles.zonesButton}
+                >
+                  <Text style={styles.zonesButtonText}>Safety Status</Text>
+                </Pressable>
+              )}
+
+              {link.canViewLocation && (
+                <Pressable
+                  onPress={() =>
                     navigation.navigate('Geofences', {
                       elderlyUserId: link.elderlyUserId,
                       elderlyName: link.elderlyUser?.fullName || null,

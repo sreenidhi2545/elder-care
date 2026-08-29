@@ -74,3 +74,32 @@ export async function listLocationsSince(userId, sinceDate) {
   );
   return rows;
 }
+
+// SCHEMA_DESIGN.md's committed retention policy — deferred at Phase 0, built
+// here. Not a config value: MAX_HISTORY_DAYS (emergency/validate.js, the cap
+// on GET /geofences/:id/history's `days` param) is already fixed at the same
+// 30, and the alerts table's own columns exist specifically so an alert
+// "outlives the 30-day location retention window" (schema.sql's comment on
+// alerts.latitude) — several things already assume this exact number, not a
+// knob meant to move independently of them.
+const RETENTION_DAYS = 30;
+
+/**
+ * Deletes every locations row older than the retention window. Safe by
+ * construction, not by care taken here: alerts.location_id is
+ * ON DELETE SET NULL, and an alert's own latitude/longitude/
+ * location_accuracy_meters/location_captured_at are separate columns,
+ * populated once at alert-creation time — deleting a locations row a
+ * resolved alert once pointed at nulls that one dangling reference and
+ * touches nothing else about the alert. See locationRetentionScheduler.js
+ * for what calls this and how often.
+ *
+ * Returns the number of rows deleted, for the scheduler to log.
+ */
+export async function purgeOldLocations() {
+  const { rowCount } = await query(
+    `DELETE FROM locations WHERE recorded_at < now() - make_interval(days => $1)`,
+    [RETENTION_DAYS]
+  );
+  return rowCount;
+}

@@ -19,6 +19,7 @@ import { FallDetectionScreen } from '../../emergency/screens/FallDetectionScreen
 import { EmergencyContactsScreen } from '../../emergency/screens/EmergencyContactsScreen';
 import { GeofencesScreen } from '../../emergency/screens/GeofencesScreen';
 import { GeofenceFormScreen } from '../../emergency/screens/GeofenceFormScreen';
+import { FamilySafetyScreen } from '../../emergency/screens/FamilySafetyScreen';
 import { CaregiverSearchScreen } from '../../caregiver/screens/CaregiverSearchScreen';
 import { CaregiverDetailScreen } from '../../caregiver/screens/CaregiverDetailScreen';
 import { BookingFormScreen } from '../../caregiver/screens/BookingFormScreen';
@@ -86,6 +87,7 @@ function FamilyNavigator() {
       <Stack.Screen name="ResponseCenter" component={ResponseCenterScreen} />
       <Stack.Screen name="FallDetection" component={FallDetectionScreen} />
       <Stack.Screen name="FamilyLinks" component={FamilyLinksScreen} />
+      <Stack.Screen name="SafetyStatus" component={FamilySafetyScreen} />
       <Stack.Screen name="Geofences" component={GeofencesScreen} />
       <Stack.Screen name="GeofenceForm" component={GeofenceFormScreen} />
       <Stack.Screen name="CaregiverSearch" component={CaregiverSearchScreen} />
