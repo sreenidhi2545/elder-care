@@ -12,6 +12,7 @@ import { app } from './app.js';
 import { config } from './shared/config/env.js';
 import { checkConnection, closePool } from './shared/db/pool.js';
 import { startEscalationScheduler, stopEscalationScheduler } from './emergency/notifications/scheduler.js';
+import { startLocationRetentionScheduler, stopLocationRetentionScheduler } from './emergency/locationRetentionScheduler.js';
 
 const server = await start();
 
@@ -31,6 +32,7 @@ async function start() {
   });
 
   startEscalationScheduler();
+  startLocationRetentionScheduler();
 
   return listener;
 }
@@ -41,6 +43,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     console.log(`\n${signal} received, shutting down.`);
     stopEscalationScheduler();
+    stopLocationRetentionScheduler();
     server.close(async () => {
       await closePool();
       process.exit(0);
