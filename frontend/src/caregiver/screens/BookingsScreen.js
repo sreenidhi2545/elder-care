@@ -67,6 +67,16 @@ export function BookingsScreen({ navigation }) {
     return booking.bookedByUserId === user.id;
   }
 
+  // Scheduling is only offered from a confirmed booking — createSchedule
+  // (backend) does not itself check the booking's status, so this is the
+  // gate. Ownership mirrors canCancel: conservative, hides rather than
+  // risking a 403 for a family viewer who isn't the one who booked it.
+  function canSchedule(booking) {
+    if (booking.status !== 'confirmed') return false;
+    if (user.role === 'elderly') return booking.elderlyUserId === user.id;
+    return booking.bookedByUserId === user.id;
+  }
+
   async function handleCancel(id) {
     setBusyId(id);
     try {
@@ -137,10 +147,20 @@ export function BookingsScreen({ navigation }) {
                 booking={b}
                 busy={busyId === b.id}
                 canCancel={canCancel(b)}
+                canSchedule={canSchedule(b)}
                 confirming={confirmCancelId === b.id}
                 onRequestCancel={() => setConfirmCancelId(b.id)}
                 onBackOut={() => setConfirmCancelId(null)}
                 onConfirmCancel={() => handleCancel(b.id)}
+                onSchedule={() =>
+                  navigation.navigate('ScheduleVisit', {
+                    bookingId: b.id,
+                    caregiverId: b.caregiverId,
+                    caregiverName: b.caregiverName,
+                    elderlyUserId: b.elderlyUserId,
+                    elderlyName: b.elderlyName,
+                  })
+                }
               />
             ))}
           </>
@@ -150,7 +170,7 @@ export function BookingsScreen({ navigation }) {
           <>
             <Text style={styles.sectionHeading}>Past</Text>
             {past.map((b) => (
-              <BookingRow key={b.id} booking={b} busy={false} canCancel={false} confirming={false} />
+              <BookingRow key={b.id} booking={b} busy={false} canCancel={false} canSchedule={false} confirming={false} />
             ))}
           </>
         )}
@@ -159,7 +179,7 @@ export function BookingsScreen({ navigation }) {
   );
 }
 
-function BookingRow({ booking, busy, canCancel, confirming, onRequestCancel, onBackOut, onConfirmCancel }) {
+function BookingRow({ booking, busy, canCancel, canSchedule, confirming, onRequestCancel, onBackOut, onConfirmCancel, onSchedule }) {
   return (
     <View style={styles.card}>
       <Text style={styles.cardName}>{booking.caregiverName}</Text>
@@ -171,6 +191,12 @@ function BookingRow({ booking, busy, canCancel, confirming, onRequestCancel, onB
       {booking.hoursPerVisit ? <Text style={styles.cardMeta}>{booking.hoursPerVisit} hours per visit</Text> : null}
 
       {busy && <ActivityIndicator color={colors.danger} style={styles.spinner} />}
+
+      {!busy && canSchedule && !confirming && (
+        <Pressable onPress={onSchedule} accessibilityRole="button" style={styles.scheduleButton}>
+          <Text style={styles.scheduleButtonText}>Schedule Visit</Text>
+        </Pressable>
+      )}
 
       {!busy && canCancel && !confirming && (
         <Pressable onPress={onRequestCancel} accessibilityRole="button" style={styles.cancelButton}>
@@ -219,6 +245,14 @@ const styles = StyleSheet.create({
   },
   cardName: { fontSize: type.heading, fontWeight: '800', color: colors.text },
   cardMeta: { fontSize: type.body - 1, color: colors.textMuted },
+  scheduleButton: {
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  scheduleButtonText: { fontSize: type.body - 1, fontWeight: '800', color: '#FFFFFF' },
   cancelButton: {
     borderRadius: 12,
     borderWidth: 1.5,

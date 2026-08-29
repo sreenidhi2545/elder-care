@@ -180,6 +180,16 @@ export function FamilyHomeScreen({ navigation }) {
           <Text style={styles.familyLinksButtonSubtext}>Caregiver requests, confirmed and past visits</Text>
         </Pressable>
 
+        <Pressable
+          style={styles.familyLinksButton}
+          onPress={() => navigation.navigate('Visits')}
+          accessibilityRole="button"
+          accessibilityLabel="Visits"
+        >
+          <Text style={styles.familyLinksButtonText}>Visits</Text>
+          <Text style={styles.familyLinksButtonSubtext}>Scheduled visits and attendance status</Text>
+        </Pressable>
+
         {banner && (
           <Pressable onPress={() => setBanner(null)} style={styles.banner}>
             <Text style={styles.bannerText}>{banner}</Text>

@@ -12,6 +12,10 @@
 // original booker (a caregiver who falls ill needs a way to say so rather
 // than leaving a confirmed visit the family is still expecting). Not shown
 // on Requests — reject is the equivalent action there.
+//
+// Schedule Visit shows only on status === 'confirmed', not 'active' —
+// createSchedule (backend) doesn't itself check booking status, so this is
+// the gate. See BUILD_LOG.md.
 // ============================================================================
 
 import { useCallback, useState } from 'react';
@@ -134,6 +138,23 @@ export function CaregiverBookingsScreen({ navigation }) {
                 </BookingCard>
               ) : (
                 <BookingCard key={b.id} booking={b} busy={busyId === b.id}>
+                  {b.status === 'confirmed' && (
+                    <Pressable
+                      onPress={() =>
+                        navigation.navigate('ScheduleVisit', {
+                          bookingId: b.id,
+                          caregiverId: b.caregiverId,
+                          caregiverName: b.caregiverName,
+                          elderlyUserId: b.elderlyUserId,
+                          elderlyName: b.elderlyName,
+                        })
+                      }
+                      accessibilityRole="button"
+                      style={styles.scheduleButton}
+                    >
+                      <Text style={styles.scheduleButtonText}>Schedule Visit</Text>
+                    </Pressable>
+                  )}
                   <Pressable onPress={() => setConfirmCancelId(b.id)} accessibilityRole="button" style={styles.cancelButton}>
                     <Text style={styles.cancelButtonText}>Cancel Booking</Text>
                   </Pressable>
@@ -214,6 +235,14 @@ const styles = StyleSheet.create({
   declineButtonText: { fontSize: type.body - 1, fontWeight: '800', color: colors.danger },
   acceptButton: { flex: 1, backgroundColor: colors.success, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
   acceptButtonText: { fontSize: type.body - 1, fontWeight: '800', color: '#FFFFFF' },
+  scheduleButton: {
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  scheduleButtonText: { fontSize: type.body - 1, fontWeight: '800', color: '#FFFFFF' },
   cancelButton: {
     borderRadius: 12,
     borderWidth: 1.5,

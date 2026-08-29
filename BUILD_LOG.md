@@ -1278,3 +1278,28 @@ Backend restarted with both changes, exercised directly against `POST /emergency
 | `POST /emergency/locations` (coordinates *required* there) with coordinates missing | still `400 validation_failed` — confirms the widened "not provided" check didn't loosen the required case |
 
 Test accounts deleted afterward.
+
+---
+
+## 2026-08-29 — Scheduling and attendance screens (frontend)
+
+**Backend already shipped all 8 endpoints** (`POST`/`GET`/`PATCH /caregiver/schedules`, `GET /caregiver/schedules/:id`, `POST /caregiver/attendance/schedules/:scheduleId/check-in` and `/check-out`, `PATCH /caregiver/attendance/:id/verify`, `GET /caregiver/attendance`, `GET /caregiver/attendance/:id`) with the ownership rules from the 2026-08-27 authorization fix (`isAssignedCaregiver`, `hasManageCaregiversPermission`) already enforced server-side. This step is frontend only: `CaregiverScheduleScreen` (caregiver's own schedule, check-in/check-out), `VisitsScreen` (elderly/family view, verify action), `ScheduleVisitScreen` (create a slot from a confirmed booking), plus entry points wired into `CaregiverHomeScreen`, `ElderlyHomeScreen`, `FamilyHomeScreen`, `BookingsScreen`, and `CaregiverBookingsScreen`. New API.md section documents all 8 endpoints.
+
+Two gaps were caught during planning and handled deliberately rather than just noted:
+
+### 1. Check-out before check-in — the caregiver gets a way out, not a dead end
+
+`recordCheckOut` (`attendance.service.js`) 400s with `not_checked_in` if there's no check-in yet for the slot. The check-out button on `CaregiverScheduleScreen` only ever renders once the last-loaded schedule list shows a check-in already recorded, so in the ordinary flow this can't fire — but the list can go stale (a second device, or the screen left open across a slow shift), so it can still happen in practice. Rather than let that surface as a plain error banner leaving the caregiver stuck looking at a failed button, `handleCheckOut` catches `ApiError` with `status === 400, code === 'not_checked_in'` specifically and swaps the card into a "You haven't checked in to this visit yet" state with a "Check In Now" button, reusing the same check-in path. One 400 code branch, no new endpoint.
+
+### 2. Overnight visits — not supported, rejected clearly instead of stored oddly
+
+`validateCreateSchedule` (`caregiver/services/validate.js`) already requires `endTime > startTime`, which means a visit cannot cross midnight — there's one `visitDate` and two times, no second date for an end time to roll into. This was already true of the backend before this step; decided to accept it as a real limitation for now rather than redesign the schema to carry a separate end-date, since nothing in this phase needs an overnight visit yet. What changed: `ScheduleVisitScreen` now checks `endTime <= startTime` client-side before submitting, with a message that says why ("End time must be after start time. Visits spanning midnight are not supported yet.") instead of letting a same-day-backwards or accidental-overnight entry either round-trip to a generic `400 validation_failed` or — if a UI bug ever let it through unvalidated — get silently misinterpreted as some other day. The backend check stays as the real guard; this is belt-and-braces at the point of entry, same reasoning as the fall-alert coordinate fix above.
+
+### Two more gaps flagged, not fixed, staying open
+
+- **`POST /caregiver/schedules` never checks the booking it's created from is `confirmed`** — nothing server-side stops a slot being scheduled against a `requested` or `cancelled` booking. The only gate is client-side: `ScheduleVisitScreen` is reachable only from a confirmed-booking row on `BookingsScreen`/`CaregiverBookingsScreen`. Fine for this app today (one client), but worth remembering if a second client, or an admin tool, ever calls this endpoint directly.
+- **Attendance check-in/check-out has no `accuracyMeters` field and does no distance check** against the elderly user's known location, unlike `POST /emergency/locations`. Whatever coordinates are sent are stored as-is — a caregiver could check in from anywhere. Not fixed here; flagged in the new API.md section.
+
+### One UI limitation accepted, not a backend gap
+
+`toScheduleResponse` (`schedules.service.js`) embeds `attendanceId`/`attendanceStatus`/`checkInAt`/`checkOutAt` on a schedule row, but not `verifiedByFamily` — this task asked to use that embed rather than fetching attendance separately, and the embed simply doesn't carry that field. `VisitsScreen` therefore can't tell an already-verified visit apart from an unverified one after a fresh load; pressing Verify flips that row to "Verified" for the current screen session only (local state), and a reload shows "Verify" again. Re-pressing is harmless — the backend PATCH just re-sets the same flag to `true`. A one-line addition to `toScheduleResponse`'s `SELECT`/mapping would close this if it turns out to matter in practice; not done here since it wasn't asked for and the workaround is genuinely harmless.

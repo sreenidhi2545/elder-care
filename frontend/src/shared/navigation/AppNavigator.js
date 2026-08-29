@@ -26,6 +26,9 @@ import { BookingsScreen } from '../../caregiver/screens/BookingsScreen';
 import { CaregiverProfileScreen } from '../../caregiver/screens/CaregiverProfileScreen';
 import { CaregiverBookingsScreen } from '../../caregiver/screens/CaregiverBookingsScreen';
 import { CaregiverVerificationScreen } from '../../caregiver/screens/CaregiverVerificationScreen';
+import { CaregiverScheduleScreen } from '../../caregiver/screens/CaregiverScheduleScreen';
+import { VisitsScreen } from '../../caregiver/screens/VisitsScreen';
+import { ScheduleVisitScreen } from '../../caregiver/screens/ScheduleVisitScreen';
 import { ManageFamilyScreen } from '../../family/screens/ManageFamilyScreen';
 import { FamilyLinksScreen } from '../../family/screens/FamilyLinksScreen';
 import { useAuth } from '../auth/AuthContext';
@@ -53,6 +56,8 @@ function ElderlyNavigator() {
       <Stack.Screen name="CaregiverDetail" component={CaregiverDetailScreen} />
       <Stack.Screen name="BookingForm" component={BookingFormScreen} />
       <Stack.Screen name="Bookings" component={BookingsScreen} />
+      <Stack.Screen name="Visits" component={VisitsScreen} />
+      <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
     </Stack.Navigator>
   );
 }
@@ -74,6 +79,8 @@ function FamilyNavigator() {
       <Stack.Screen name="CaregiverDetail" component={CaregiverDetailScreen} />
       <Stack.Screen name="BookingForm" component={BookingFormScreen} />
       <Stack.Screen name="Bookings" component={BookingsScreen} />
+      <Stack.Screen name="Visits" component={VisitsScreen} />
+      <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
     </Stack.Navigator>
   );
 }
@@ -84,6 +91,8 @@ function CaregiverNavigator() {
       <Stack.Screen name="CaregiverHome" component={CaregiverHomeScreen} />
       <Stack.Screen name="CaregiverProfile" component={CaregiverProfileScreen} />
       <Stack.Screen name="CaregiverBookings" component={CaregiverBookingsScreen} />
+      <Stack.Screen name="CaregiverSchedule" component={CaregiverScheduleScreen} />
+      <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
     </Stack.Navigator>
   );
 }

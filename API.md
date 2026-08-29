@@ -1765,6 +1765,180 @@ The caller's own bookings — elderly sees their own, family sees ones they book
 
 ---
 
+## Caregiver Scheduling & Attendance (Phase 2)
+
+A `schedules` row is one visit slot, created from a confirmed booking; an `attendance` row is one-to-one with it (`attendance.schedule_id UNIQUE`), auto-created in `pending` status the moment the schedule is. `GET /caregiver/schedules` and `GET /caregiver/schedules/:id` embed that linked attendance row's `id`/`status`/`check_in_at`/`check_out_at` directly on the schedule response (`attendanceId`, `attendanceStatus`, `checkInAt`, `checkOutAt`) — a schedule list gives both in one fetch; there is no need to also call `GET /caregiver/attendance` just to show attendance state next to a list of visits.
+
+**`POST /caregiver/schedules` does not check that the booking it's created from is `confirmed`.** Nothing server-side stops a schedule being created against a `requested`, `cancelled`, or `rejected` booking — the only gate is client-side: the app only offers "Schedule Visit" on a booking whose `status` is `confirmed`. Treat this as a real gap if a second client integrates against this endpoint directly.
+
+**Permission model — schedules.** Create and read/write access are the same set: the elderly user themselves, the assigned caregiver (`isAssignedCaregiver`, `caregiver/services/authorize.js`), a family member with `hasManageCaregiversPermission`, or admin.
+
+**Permission model — attendance.** Check-in/check-out: the assigned caregiver, or admin — nobody else, not even the elderly user or family, can record attendance on a caregiver's behalf. Verify (`PATCH /caregiver/attendance/:id/verify`): the elderly user themselves, a family member with `hasManageCaregiversPermission`, or admin — **the assigned caregiver is deliberately excluded**, since a caregiver verifying their own attendance defeats the point of an independent confirmation.
+
+**Known gap: no accuracy field, no distance validation on check-in/out.** Unlike `POST /emergency/locations`, the attendance endpoints accept `latitude`/`longitude` with no `accuracyMeters` and do nothing to confirm the coordinates are anywhere near the elderly user's address — whatever is sent is stored as-is. A caregiver could in principle check in from anywhere. Not fixed here; see `BUILD_LOG.md`, 2026-08-29.
+
+### `POST /caregiver/schedules`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `bookingId` | UUID | **yes** | |
+| `caregiverId` | UUID | **yes** | |
+| `elderlyUserId` | UUID | **yes** | |
+| `visitDate` | string | **yes** | `YYYY-MM-DD` |
+| `startTime` | string | **yes** | `HH:MM` or `HH:MM:SS` |
+| `endTime` | string | **yes** | `HH:MM` or `HH:MM:SS`, must be after `startTime` — same calendar day only, a visit cannot span midnight today |
+| `notes` | string | no | |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "schedule": {
+    "id": "3f1e2a9b-...",
+    "bookingId": "9b2e6f3a-...",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "caregiverPhone": "+919876500000",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "elderlyPhone": "+919876543210",
+    "visitDate": "2026-09-15",
+    "startTime": "09:00:00",
+    "endTime": "11:00:00",
+    "status": "scheduled",
+    "notes": null,
+    "attendanceId": "8a4c1d2e-...",
+    "attendanceStatus": "pending",
+    "checkInAt": null,
+    "checkOutAt": null,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`, `409 schedule_conflict` (this caregiver already has a slot the same day whose time range overlaps the requested one — checked per caregiver, not per elderly user, so the same caregiver cannot be double-booked even across two different families).
+
+---
+
+### `GET /caregiver/schedules`
+
+Scoped server-side same as bookings: elderly sees their own, family sees their own plus every active linked elderly user's, caregiver sees their own assigned slots, admin sees all.
+
+**Query parameters (all optional):** `caregiverId`, `elderlyUserId`, `startDate`, `endDate` (both `YYYY-MM-DD`), `status` (`scheduled`/`completed`/`missed`/`cancelled`/`rescheduled`).
+
+**Response `200`** — `{ "status": "ok", "count": 1, "schedules": [ { "...": "same shape as above" } ] }`, ordered by `visitDate` then `startTime` ascending.
+
+---
+
+### `GET /caregiver/schedules/:id`
+
+**Response `200`** — the schedule. **Errors:** `403 not_permitted`, `404 schedule_not_found`.
+
+---
+
+### `PATCH /caregiver/schedules/:id`
+
+Changes a slot's own status directly (e.g. `missed`, `cancelled`, `rescheduled`) — not how a visit gets marked `completed` day-to-day, which happens automatically the moment check-out is recorded (see below).
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `status` | string | **yes** | `scheduled` \| `completed` \| `missed` \| `cancelled` \| `rescheduled` |
+| `notes` | string | no | |
+
+**Response `200`** — the updated schedule. **Errors:** `400 validation_failed`, `403 not_permitted`, `404 schedule_not_found`.
+
+---
+
+### `POST /caregiver/attendance/schedules/:scheduleId/check-in`
+
+Assigned caregiver or admin only. Upserts the schedule's attendance row to `checked_in` with the current timestamp — safe to call again before checking out (a re-check-in just overwrites the time and coordinates).
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `latitude` | number | no | -90 to 90 |
+| `longitude` | number | no | -180 to 180 |
+| `notes` | string | no | |
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "attendance": {
+    "id": "8a4c1d2e-...",
+    "scheduleId": "3f1e2a9b-...",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "caregiverPhone": "+919876500000",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "visitDate": "2026-09-15",
+    "startTime": "09:00:00",
+    "endTime": "11:00:00",
+    "checkInAt": "2026-09-15T09:02:11.000Z",
+    "checkInLatitude": 12.971599,
+    "checkInLongitude": 77.594566,
+    "checkOutAt": null,
+    "checkOutLatitude": null,
+    "checkOutLongitude": null,
+    "durationMinutes": null,
+    "status": "checked_in",
+    "verifiedByFamily": false,
+    "notes": null,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-09-15T09:02:11.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_authorized` (caller is not the assigned caregiver), `404 schedule_not_found`.
+
+---
+
+### `POST /caregiver/attendance/schedules/:scheduleId/check-out`
+
+Assigned caregiver or admin only. Sets `checkOutAt`, computes `durationMinutes` from the stored `checkInAt` (minimum 1), sets attendance `status: "checked_out"`, and — as a side effect — sets the schedule's own `status` to `"completed"`.
+
+**Request body** — same shape as check-in.
+
+**Response `200`** — the attendance record, same shape as check-in's response with `checkOutAt`/`checkOutLatitude`/`checkOutLongitude`/`durationMinutes` populated and `status: "checked_out"`.
+
+**Errors:** `400 validation_failed`, `400 not_checked_in` (no check-in recorded yet for this schedule), `403 not_authorized`, `404 schedule_not_found`.
+
+---
+
+### `PATCH /caregiver/attendance/:id/verify`
+
+Sets `verifiedByFamily: true`. Elderly self, family with `hasManageCaregiversPermission`, or admin — never the caregiver themselves. Idempotent: verifying an already-verified record re-sets the same flag, no error.
+
+**Response `200`** — the attendance record. **Errors:** `403 not_permitted`, `404 attendance_not_found`.
+
+---
+
+### `GET /caregiver/attendance`
+
+Scoped server-side the same way as `GET /caregiver/schedules`.
+
+**Query parameters (all optional):** `caregiverId`, `elderlyUserId`, `status` (`pending`/`checked_in`/`checked_out`/`absent`/`late`).
+
+**Response `200`** — `{ "status": "ok", "count": 1, "attendance": [ { "...": "same shape as check-in's response" } ] }`, newest-created first.
+
+---
+
+### `GET /caregiver/attendance/:id`
+
+**Response `200`** — the attendance record. **Errors:** `403 not_permitted`, `404 attendance_not_found`.
+
+---
+
 ## Known limitations
 
 **Pre-registration invites do not work.** `POST /family/invites` can only invite someone who has already registered an account — the invitee is looked up by phone, and an unregistered number returns `404 invitee_not_registered`. For real users this is the common case, not an edge case: a daughter installs the app for her mother, then wants to invite a brother who has nothing installed yet. Today he has to register first, then be invited. Building pre-registration invites (an invite record keyed on a phone number rather than a user id, resolved and turned into a real `family_links` row the moment that phone number registers) is a real feature, not a quick fix — it needs its own table or a nullable `family_user_id`, a way to notify the inviter once the invite resolves, and a decision on how long an unclaimed invite stays valid. Not attempted here.
