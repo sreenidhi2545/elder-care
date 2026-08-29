@@ -75,3 +75,15 @@ export function listLinks({ status } = {}) {
 export function promoteToEmergencyContact(linkId) {
   return apiRequest(`/family/links/${linkId}/emergency-contact`, { method: 'POST' });
 }
+
+/**
+ * PATCH /family/links/:id — elderly-only. Edits an active link's permission
+ * fields without revoking it — same idea as the emergency-contact toggle,
+ * a second independent dial on the same relationship. Used by
+ * ManageFamilyScreen for `canManageCaregivers` ("let them book caregivers
+ * and manage care plans/tasks for you"); any of the other permission
+ * fields work the same way if a screen needs them later.
+ */
+export function updateLinkPermissions(linkId, patch) {
+  return apiRequest(`/family/links/${linkId}`, { method: 'PATCH', body: patch });
+}

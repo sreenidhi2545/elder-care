@@ -5,7 +5,7 @@
 
 This document is the agreement between the backend and the mobile app. Every endpoint the app is allowed to call is listed here. If you add an endpoint, add it to this file in the same Pull Request. If you need an endpoint that does not exist yet, raise it in the group rather than working around it.
 
-The authentication endpoints, the emergency alert endpoints, GPS capture, notification fanout and broadcast, family link invitations, and emergency contact management exist today. Geofencing and the caregiver endpoints arrive with later steps and phases and will be added to this file as they are built.
+The authentication endpoints, the emergency alert endpoints, GPS capture, notification fanout and broadcast, family link invitations, emergency contact management, and geofencing exist today. Caregiver profile/search/booking are documented below; the rest of the caregiver module (scheduling, attendance, care plans, tasks, activity reports, reviews) exists in the code but is not yet documented here — it arrives with its own screens.
 
 ---
 
@@ -159,6 +159,14 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `PATCH` | `/emergency/geofences/:id` | Bearer | Edit a zone |
 | `DELETE` | `/emergency/geofences/:id` | Bearer | Soft-delete a zone |
 | `GET` | `/emergency/geofences/:id/history` | Bearer | Recent inside/outside tally for one zone |
+| `POST` | `/caregiver/profile` | Bearer + `caregiver`/`admin` | Create or update the caller's own caregiver profile (upsert) |
+| `GET` | `/caregiver/profile/me` | Bearer + `caregiver`/`admin` | The caller's own caregiver profile |
+| `GET` | `/caregiver/search` | Bearer | Search verified, available caregivers |
+| `GET` | `/caregiver/:id` | Bearer | One caregiver's full profile |
+| `POST` | `/caregiver/bookings` | Bearer + `elderly`/`family`/`admin` | Request a caregiver |
+| `GET` | `/caregiver/bookings` | Bearer | The caller's own bookings, scoped by role |
+| `GET` | `/caregiver/bookings/:id` | Bearer | One booking, if the caller is entitled to see it |
+| `PATCH` | `/caregiver/bookings/:id/status` | Bearer | Confirm, reject, cancel, or mark active/complete — who may make which transition is enforced server-side |
 
 ---
 
@@ -1563,6 +1571,197 @@ Most recent `locations` row for an elderly user, or `null` if they have none yet
 `location: null` when nothing has been recorded for that user yet — the client blocks zone creation from this path rather than guessing a centre.
 
 **Errors:** `400 validation_failed` (missing `elderlyUserId` for a non-elderly caller), `403 not_permitted` (lacks `canViewLocation` on an active link).
+
+---
+
+## Caregiver Profiles, Search & Booking (Phase 2)
+
+A `caregivers` row is one-to-one with a `users` row of role `caregiver` (`caregivers.user_id UNIQUE`). Profile fields live on `caregivers`; name/email/phone are read live from the joined `users` row, not copied.
+
+**Permission model.** Booking write access (create a booking on someone's behalf) is gated the same way geofences and safe zones are: the elderly user themselves, or a family member with an active `family_links` row and `canManageCaregivers: true` (`hasManageCaregiversPermission`, `family/links.js`) — the same field `PATCH /family/links/:id` already grants/revokes, see "Family Links" above. Reading a specific booking is permitted for its elderly user, whoever booked it, the assigned caregiver, a `canManageCaregivers` family member, or admin. Confirming, rejecting, or marking a booking active/complete is caregiver/admin-only; cancelling is permitted for the elderly owner, whoever booked it, the assigned caregiver, or admin — not every linked family member, only the one who made that specific booking.
+
+### `POST /caregiver/profile`
+
+Creates the caller's profile if none exists, otherwise updates it (upsert) — every field is optional and omitting one leaves the existing value untouched.
+
+**Request body**
+
+| Field | Type | Rules |
+|---|---|---|
+| `bio` | string | |
+| `experienceYears` | integer | 0-70 |
+| `qualifications` | string | |
+| `specializations` | string[] | |
+| `languages` | string[] | |
+| `hourlyRate` | number | ≥ 0 |
+| `serviceAreaCity` | string | |
+| `isAvailable` | boolean | |
+
+`currency` is not a caller input — always `'INR'` server-side.
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "caregiver": {
+    "id": "7c9e6f3a-...",
+    "userId": "2e4fe1ff-...",
+    "fullName": "Asha Devi",
+    "email": null,
+    "phone": "+919876543210",
+    "profilePhotoUrl": null,
+    "bio": "10 years caring for elderly patients.",
+    "experienceYears": 10,
+    "qualifications": "Certified nursing assistant",
+    "specializations": ["Dementia care", "Post-surgery care"],
+    "languages": ["Hindi", "English"],
+    "hourlyRate": 250,
+    "currency": "INR",
+    "serviceAreaCity": "Bengaluru",
+    "idProofType": null,
+    "idVerified": false,
+    "verificationStatus": "pending",
+    "verifiedAt": null,
+    "verifiedBy": null,
+    "isAvailable": true,
+    "averageRating": 0,
+    "totalReviews": 0,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`.
+
+---
+
+### `GET /caregiver/profile/me`
+
+**Response `200`** — `{ "status": "ok", "caregiver": { "...": "same shape as above" } }`, or `"caregiver": null` before the caller has ever saved one.
+
+---
+
+### `GET /caregiver/search`
+
+Verified + available caregivers by default.
+
+**Query parameters**
+
+| Field | Rules |
+|---|---|
+| `city` | Substring match, case-insensitive |
+| `language` | Exact match against one entry in `languages`, case-insensitive |
+| `specialization` | Exact match against one entry in `specializations`, case-insensitive |
+| `minRating` | Number |
+| `verifiedOnly` | Default `true`; pass `false` to include unverified |
+| `availableOnly` | Default `true`; pass `false` to include unavailable |
+| `page` | Default `1` |
+| `limit` | Default `20` |
+
+**Response `200`**
+
+```json
+{ "status": "ok", "total": 1, "page": 1, "limit": 20, "caregivers": [ { "...": "same shape as POST /caregiver/profile" } ] }
+```
+
+---
+
+### `GET /caregiver/:id`
+
+One caregiver's full profile — no restriction beyond being signed in.
+
+**Response `200`** — `{ "status": "ok", "caregiver": { "..." } }`. **Errors:** `404 caregiver_not_found`.
+
+---
+
+### `POST /caregiver/bookings`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `elderlyUserId` | UUID | **yes** | Who the booking is for |
+| `caregiverId` | UUID | **yes** | Must exist |
+| `startDate` | string | **yes** | `YYYY-MM-DD` |
+| `endDate` | string | no | `YYYY-MM-DD`, not before `startDate` |
+| `recurrence` | string | no | `one_time` (default) \| `daily` \| `weekly` \| `monthly` |
+| `hoursPerVisit` | number | no | 0-24 |
+| `agreedRate` | number | no | ≥ 0 |
+| `specialInstructions` | string | no | |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "booking": {
+    "id": "9b2e6f3a-...",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "elderlyPhone": "+919876543210",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "caregiverPhone": "+919876500000",
+    "bookedByUserId": "2e4fe1ff-...",
+    "bookedByName": "Ramesh Kumar",
+    "status": "requested",
+    "startDate": "2026-09-15",
+    "endDate": null,
+    "recurrence": "weekly",
+    "hoursPerVisit": 4,
+    "agreedRate": null,
+    "currency": "INR",
+    "specialInstructions": null,
+    "cancellationReason": null,
+    "cancelledBy": null,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted` (caller lacks `canManageCaregivers` for `elderlyUserId`), `404 caregiver_not_found`.
+
+---
+
+### `GET /caregiver/bookings`
+
+The caller's own bookings — elderly sees their own, family sees ones they booked plus every active linked elderly user's, caregiver sees ones assigned to them, admin sees all.
+
+**Query parameters:** `status` (optional, one of `requested`/`confirmed`/`active`/`completed`/`cancelled`/`rejected`).
+
+**Response `200`** — `{ "status": "ok", "count": 1, "bookings": [ { "...": "same shape as above" } ] }`.
+
+---
+
+### `GET /caregiver/bookings/:id`
+
+**Response `200`** — the booking. **Errors:** `403 not_permitted`, `404 booking_not_found`.
+
+---
+
+### `PATCH /caregiver/bookings/:id/status`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `status` | string | **yes** | `requested` \| `confirmed` \| `active` \| `completed` \| `cancelled` \| `rejected` |
+| `cancellationReason` | string | no | Only meaningful when `status: "cancelled"` |
+
+**Who may make which transition:**
+
+| Transition | Permitted |
+|---|---|
+| → `confirmed` / `rejected` | Assigned caregiver, or admin |
+| → `active` / `completed` | Assigned caregiver, or admin |
+| → `cancelled` | Elderly owner, whoever booked it, the assigned caregiver, or admin |
+
+**Response `200`** — the updated booking.
+
+**Errors:** `400 validation_failed`, `403 not_authorized` (wrong actor for this transition), `404 booking_not_found`.
 
 ---
 

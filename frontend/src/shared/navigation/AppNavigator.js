@@ -19,6 +19,12 @@ import { FallDetectionScreen } from '../../emergency/screens/FallDetectionScreen
 import { EmergencyContactsScreen } from '../../emergency/screens/EmergencyContactsScreen';
 import { GeofencesScreen } from '../../emergency/screens/GeofencesScreen';
 import { GeofenceFormScreen } from '../../emergency/screens/GeofenceFormScreen';
+import { CaregiverSearchScreen } from '../../caregiver/screens/CaregiverSearchScreen';
+import { CaregiverDetailScreen } from '../../caregiver/screens/CaregiverDetailScreen';
+import { BookingFormScreen } from '../../caregiver/screens/BookingFormScreen';
+import { BookingsScreen } from '../../caregiver/screens/BookingsScreen';
+import { CaregiverProfileScreen } from '../../caregiver/screens/CaregiverProfileScreen';
+import { CaregiverBookingsScreen } from '../../caregiver/screens/CaregiverBookingsScreen';
 import { ManageFamilyScreen } from '../../family/screens/ManageFamilyScreen';
 import { FamilyLinksScreen } from '../../family/screens/FamilyLinksScreen';
 import { useAuth } from '../auth/AuthContext';
@@ -42,6 +48,10 @@ function ElderlyNavigator() {
       <Stack.Screen name="EmergencyContacts" component={EmergencyContactsScreen} />
       <Stack.Screen name="Geofences" component={GeofencesScreen} />
       <Stack.Screen name="GeofenceForm" component={GeofenceFormScreen} />
+      <Stack.Screen name="CaregiverSearch" component={CaregiverSearchScreen} />
+      <Stack.Screen name="CaregiverDetail" component={CaregiverDetailScreen} />
+      <Stack.Screen name="BookingForm" component={BookingFormScreen} />
+      <Stack.Screen name="Bookings" component={BookingsScreen} />
     </Stack.Navigator>
   );
 }
@@ -59,6 +69,10 @@ function FamilyNavigator() {
       <Stack.Screen name="FamilyLinks" component={FamilyLinksScreen} />
       <Stack.Screen name="Geofences" component={GeofencesScreen} />
       <Stack.Screen name="GeofenceForm" component={GeofenceFormScreen} />
+      <Stack.Screen name="CaregiverSearch" component={CaregiverSearchScreen} />
+      <Stack.Screen name="CaregiverDetail" component={CaregiverDetailScreen} />
+      <Stack.Screen name="BookingForm" component={BookingFormScreen} />
+      <Stack.Screen name="Bookings" component={BookingsScreen} />
     </Stack.Navigator>
   );
 }
@@ -67,6 +81,8 @@ function CaregiverNavigator() {
   return (
     <Stack.Navigator screenOptions={screenOptions}>
       <Stack.Screen name="CaregiverHome" component={CaregiverHomeScreen} />
+      <Stack.Screen name="CaregiverProfile" component={CaregiverProfileScreen} />
+      <Stack.Screen name="CaregiverBookings" component={CaregiverBookingsScreen} />
     </Stack.Navigator>
   );
 }

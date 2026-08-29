@@ -43,7 +43,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { sendInvite, revokeLink, listLinks, promoteToEmergencyContact } from '../api/links';
+import { sendInvite, revokeLink, listLinks, promoteToEmergencyContact, updateLinkPermissions } from '../api/links';
 import { listContacts, deleteContact } from '../../emergency/api/contacts';
 import { ApiError, NetworkError } from '../../shared/api/client';
 import { useAuth } from '../../shared/auth/AuthContext';
@@ -60,6 +60,7 @@ export function ManageFamilyScreen({ navigation }) {
   const [confirmRevokeId, setConfirmRevokeId] = useState(null);
   const [revokingId, setRevokingId] = useState(null);
   const [togglingLinkId, setTogglingLinkId] = useState(null);
+  const [togglingCaregiverPermissionId, setTogglingCaregiverPermissionId] = useState(null);
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invitePhone, setInvitePhone] = useState('');
@@ -184,6 +185,21 @@ export function ManageFamilyScreen({ navigation }) {
     }
   }
 
+  async function handleToggleManageCaregivers(link) {
+    setTogglingCaregiverPermissionId(link.id);
+    try {
+      await updateLinkPermissions(link.id, { canManageCaregivers: !link.canManageCaregivers });
+      await load({ silent: true });
+    } catch (err) {
+      setBanner({
+        kind: 'error',
+        text: err instanceof NetworkError ? 'Could not reach the server. Please try again.' : 'Could not update that. Please try again.',
+      });
+    } finally {
+      setTogglingCaregiverPermissionId(null);
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -223,10 +239,12 @@ export function ManageFamilyScreen({ navigation }) {
                 confirmingRevoke={confirmRevokeId === link.id}
                 revoking={revokingId === link.id}
                 togglingEmergencyContact={togglingLinkId === link.id}
+                togglingManageCaregivers={togglingCaregiverPermissionId === link.id}
                 onRequestRevoke={() => setConfirmRevokeId(link.id)}
                 onBackOut={() => setConfirmRevokeId(null)}
                 onConfirmRevoke={() => handleRevoke(link.id)}
                 onToggleEmergencyContact={() => handleToggleEmergencyContact(link)}
+                onToggleManageCaregivers={() => handleToggleManageCaregivers(link)}
               />
             ))}
 
@@ -349,10 +367,12 @@ function FamilyCard({
   confirmingRevoke,
   revoking,
   togglingEmergencyContact,
+  togglingManageCaregivers,
   onRequestRevoke,
   onBackOut,
   onConfirmRevoke,
   onToggleEmergencyContact,
+  onToggleManageCaregivers,
 }) {
   const isEmergencyContact = !!contact;
   const displayName = link.familyUser?.fullName || 'Family member';
@@ -384,6 +404,25 @@ function FamilyCard({
             onValueChange={onToggleEmergencyContact}
             trackColor={{ false: colors.border, true: colors.success }}
             accessibilityLabel="Also call them in an emergency"
+          />
+        )}
+      </View>
+
+      <View style={styles.emergencyToggleRow}>
+        <View style={styles.toggleTextGroup}>
+          <Text style={styles.toggleLabel}>Let them manage caregivers</Text>
+          <Text style={styles.toggleHint}>
+            They'll be able to book caregivers, edit care plans, and manage caregiver visits for you.
+          </Text>
+        </View>
+        {togglingManageCaregivers ? (
+          <ActivityIndicator color={colors.primary} />
+        ) : (
+          <Switch
+            value={!!link.canManageCaregivers}
+            onValueChange={onToggleManageCaregivers}
+            trackColor={{ false: colors.border, true: colors.success }}
+            accessibilityLabel="Let them manage caregivers"
           />
         )}
       </View>

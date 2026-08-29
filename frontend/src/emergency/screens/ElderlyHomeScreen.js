@@ -501,6 +501,49 @@ export function ElderlyHomeScreen({ navigation }) {
                 </Pressable>
               </View>
 
+              {/* Caregivers Section */}
+              <View style={styles.actionCardsSection}>
+                <Text style={styles.sectionHeading}>Caregivers</Text>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.caregiverSearchCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('CaregiverSearch', {})}
+                  accessibilityRole="button"
+                  accessibilityLabel="Find a Caregiver"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#F0FDFA' }]}>
+                    <Text style={styles.cardIconText}>🔍</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#0F766E' }]}>Find a Caregiver</Text>
+                    <Text style={styles.cardSubtitle}>Search by city, language and specialization</Text>
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.caregiverBookingsCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('Bookings')}
+                  accessibilityRole="button"
+                  accessibilityLabel="My Caregiver Bookings"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#FDF4FF' }]}>
+                    <Text style={styles.cardIconText}>📋</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#A21CAF' }]}>My Bookings</Text>
+                    <Text style={styles.cardSubtitle}>Requests, confirmed and past visits</Text>
+                  </View>
+                </Pressable>
+              </View>
+
               {/* Location & Tracking Controls */}
               <View style={styles.locationSection}>
                 <Text style={styles.sectionHeading}>Location & Safety Sharing</Text>
@@ -905,6 +948,14 @@ const styles = StyleSheet.create({
   zonesCard: {
     backgroundColor: '#ECFEFF',
     borderColor: '#0E7490',
+  },
+  caregiverSearchCard: {
+    backgroundColor: '#F0FDFA',
+    borderColor: '#0F766E',
+  },
+  caregiverBookingsCard: {
+    backgroundColor: '#FDF4FF',
+    borderColor: '#A21CAF',
   },
   cardIconBadge: {
     width: 46,
