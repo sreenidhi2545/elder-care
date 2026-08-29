@@ -57,3 +57,17 @@ export function searchCaregivers(filters = {}) {
 export function getCaregiverById(id) {
   return apiRequest(`/caregiver/${id}`);
 }
+
+/** GET /caregiver/verification-queue — admin only. Caregivers awaiting verification, oldest first. */
+export function listPendingCaregivers() {
+  return apiRequest('/caregiver/verification-queue');
+}
+
+/**
+ * PATCH /caregiver/:id/verification — admin only.
+ * @param {string} id
+ * @param {'verified'|'rejected'} verificationStatus
+ */
+export function updateCaregiverVerification(id, verificationStatus) {
+  return apiRequest(`/caregiver/${id}/verification`, { method: 'PATCH', body: { verificationStatus } });
+}

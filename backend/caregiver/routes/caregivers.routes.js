@@ -14,6 +14,7 @@ import {
   findCaregiverByUserId,
   findCaregiverById,
   searchCaregivers,
+  listPendingCaregivers,
   updateCaregiverVerification,
 } from '../services/caregivers.service.js';
 
@@ -46,6 +47,12 @@ caregiversRouter.get('/search', requireAuth, async (req, res) => {
     limit: limit ? parseInt(limit, 10) : 20,
   });
   res.json({ status: 'ok', ...result });
+});
+
+// Admin views caregivers awaiting verification, oldest first
+caregiversRouter.get('/verification-queue', requireAuth, requireRole('admin'), async (req, res) => {
+  const result = await listPendingCaregivers();
+  res.json({ status: 'ok', caregivers: result });
 });
 
 // Admin updates verification status

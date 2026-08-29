@@ -25,6 +25,7 @@ import { BookingFormScreen } from '../../caregiver/screens/BookingFormScreen';
 import { BookingsScreen } from '../../caregiver/screens/BookingsScreen';
 import { CaregiverProfileScreen } from '../../caregiver/screens/CaregiverProfileScreen';
 import { CaregiverBookingsScreen } from '../../caregiver/screens/CaregiverBookingsScreen';
+import { CaregiverVerificationScreen } from '../../caregiver/screens/CaregiverVerificationScreen';
 import { ManageFamilyScreen } from '../../family/screens/ManageFamilyScreen';
 import { FamilyLinksScreen } from '../../family/screens/FamilyLinksScreen';
 import { useAuth } from '../auth/AuthContext';
@@ -91,6 +92,7 @@ function AdminNavigator() {
   return (
     <Stack.Navigator screenOptions={screenOptions}>
       <Stack.Screen name="AdminHome" component={AdminHomeScreen} />
+      <Stack.Screen name="CaregiverVerification" component={CaregiverVerificationScreen} />
     </Stack.Navigator>
   );
 }
