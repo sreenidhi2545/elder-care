@@ -1939,6 +1939,85 @@ Scoped server-side the same way as `GET /caregiver/schedules`.
 
 ---
 
+## Care Plans (Phase 4)
+
+A `care_plans` row is medical information for one elderly user: conditions, allergies, medications, mobility/dietary notes, emergency instructions. An elderly user can have more than one — `status` (`draft`/`active`/`archived`) makes this a history, not a single record; `GET /caregiver/care-plans/elderly/:elderlyUserId` returns all of them, newest first.
+
+**Permission model — and there is no view-only tier.** Write (create/update) is the elderly user themselves, a family member with `hasManageCaregiversPermission` (`family/links.js`), or admin. Read is that same set, **plus** a caregiver with a real assignment to the elderly user (`caregiverHasAssignmentWith`, `caregiver/services/authorize.js` — a confirmed/active/completed booking, or a schedule; being findable in search alone grants nothing). Unlike geofences, there is no separate "can view but not manage" split for family here: `hasManageCaregiversPermission` is one flag that gates both read and write identically, so a family member who can see a care plan can always also edit it. The only viewer who is genuinely read-only is a caregiver — `POST`/`PATCH` both exclude that role at the route's `requireRole` gate, not just at the permission-function level. A family member without `can_manage_caregivers` gets `403` on read too, same as write — there is no way today to grant "can see the allergy list, can't change it" to a family member. Worth revisiting; not attempted here. See `BUILD_LOG.md`.
+
+### `POST /caregiver/care-plans`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `elderlyUserId` | UUID | **yes** | |
+| `title` | string | **yes** | 1-150 chars |
+| `description` | string | no | |
+| `medicalConditions` | string | no | |
+| `allergies` | string | no | |
+| `medications` | string | no | |
+| `dietaryNotes` | string | no | |
+| `mobilityNotes` | string | no | |
+| `emergencyInstructions` | string | no | |
+| `startDate` | string | no | `YYYY-MM-DD` |
+| `endDate` | string | no | `YYYY-MM-DD`, not before `startDate` |
+| `status` | string | no | `draft` \| `active` \| `archived`, defaults to `active` |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "carePlan": {
+    "id": "6e2a1f3c-...",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "createdByUserId": "2e4fe1ff-...",
+    "createdByName": "Ramesh Kumar",
+    "title": "Ramesh's ongoing care plan",
+    "description": null,
+    "medicalConditions": "Type 2 diabetes, hypertension",
+    "allergies": "Penicillin",
+    "medications": "Metformin 500mg twice daily",
+    "dietaryNotes": "Low sodium",
+    "mobilityNotes": "Uses a walker",
+    "emergencyInstructions": "Call daughter first, then 108",
+    "startDate": null,
+    "endDate": null,
+    "status": "active",
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`.
+
+---
+
+### `GET /caregiver/care-plans/elderly/:elderlyUserId`
+
+**Query parameters:** `status` (optional, one of `draft`/`active`/`archived`).
+
+**Response `200`** — `{ "status": "ok", "count": 1, "carePlans": [ { "...": "same shape as above" } ] }`, newest-created first. **Errors:** `403 not_permitted`.
+
+---
+
+### `GET /caregiver/care-plans/:id`
+
+**Response `200`** — the care plan. **Errors:** `403 not_permitted`, `404 care_plan_not_found`.
+
+---
+
+### `PATCH /caregiver/care-plans/:id`
+
+Every field optional, at least one required. Same shape and rules as create, minus `elderlyUserId` (not editable — a care plan does not change whose it is).
+
+**Response `200`** — the updated care plan. **Errors:** `400 validation_failed` (including a bad `status` value — the enum cast is caught by the validator, not left to surface as a raw database error), `403 not_permitted`, `404 care_plan_not_found`.
+
+---
+
 ## Known limitations
 
 **Pre-registration invites do not work.** `POST /family/invites` can only invite someone who has already registered an account — the invitee is looked up by phone, and an unregistered number returns `404 invitee_not_registered`. For real users this is the common case, not an edge case: a daughter installs the app for her mother, then wants to invite a brother who has nothing installed yet. Today he has to register first, then be invited. Building pre-registration invites (an invite record keyed on a phone number rather than a user id, resolved and turned into a real `family_links` row the moment that phone number registers) is a real feature, not a quick fix — it needs its own table or a nullable `family_user_id`, a way to notify the inviter once the invite resolves, and a decision on how long an unclaimed invite stays valid. Not attempted here.

@@ -29,6 +29,8 @@ import { CaregiverVerificationScreen } from '../../caregiver/screens/CaregiverVe
 import { CaregiverScheduleScreen } from '../../caregiver/screens/CaregiverScheduleScreen';
 import { VisitsScreen } from '../../caregiver/screens/VisitsScreen';
 import { ScheduleVisitScreen } from '../../caregiver/screens/ScheduleVisitScreen';
+import { CarePlanScreen } from '../../caregiver/screens/CarePlanScreen';
+import { CarePlanFormScreen } from '../../caregiver/screens/CarePlanFormScreen';
 import { ManageFamilyScreen } from '../../family/screens/ManageFamilyScreen';
 import { FamilyLinksScreen } from '../../family/screens/FamilyLinksScreen';
 import { useAuth } from '../auth/AuthContext';
@@ -58,6 +60,8 @@ function ElderlyNavigator() {
       <Stack.Screen name="Bookings" component={BookingsScreen} />
       <Stack.Screen name="Visits" component={VisitsScreen} />
       <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
+      <Stack.Screen name="CarePlan" component={CarePlanScreen} />
+      <Stack.Screen name="CarePlanForm" component={CarePlanFormScreen} />
     </Stack.Navigator>
   );
 }
@@ -81,6 +85,8 @@ function FamilyNavigator() {
       <Stack.Screen name="Bookings" component={BookingsScreen} />
       <Stack.Screen name="Visits" component={VisitsScreen} />
       <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
+      <Stack.Screen name="CarePlan" component={CarePlanScreen} />
+      <Stack.Screen name="CarePlanForm" component={CarePlanFormScreen} />
     </Stack.Navigator>
   );
 }
@@ -93,6 +99,7 @@ function CaregiverNavigator() {
       <Stack.Screen name="CaregiverBookings" component={CaregiverBookingsScreen} />
       <Stack.Screen name="CaregiverSchedule" component={CaregiverScheduleScreen} />
       <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
+      <Stack.Screen name="CarePlan" component={CarePlanScreen} />
     </Stack.Navigator>
   );
 }

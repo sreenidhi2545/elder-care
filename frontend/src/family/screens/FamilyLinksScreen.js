@@ -214,6 +214,21 @@ export function FamilyLinksScreen({ navigation }) {
                 </Pressable>
               )}
 
+              {link.canManageCaregivers && (
+                <Pressable
+                  onPress={() =>
+                    navigation.navigate('CarePlan', {
+                      elderlyUserId: link.elderlyUserId,
+                      elderlyName: link.elderlyUser?.fullName || null,
+                    })
+                  }
+                  accessibilityRole="button"
+                  style={styles.zonesButton}
+                >
+                  <Text style={styles.zonesButtonText}>Care Plan</Text>
+                </Pressable>
+              )}
+
               {leavingId === link.id ? (
                 <ActivityIndicator color={colors.danger} style={styles.spinner} />
               ) : confirmLeaveId === link.id ? (

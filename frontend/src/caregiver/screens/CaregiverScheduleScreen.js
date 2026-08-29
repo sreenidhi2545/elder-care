@@ -144,6 +144,9 @@ export function CaregiverScheduleScreen({ navigation }) {
                 checkoutBlocked={checkoutBlockedId === s.id}
                 onCheckIn={() => handleCheckIn(s.id)}
                 onCheckOut={() => handleCheckOut(s.id)}
+                onViewCarePlan={() =>
+                  navigation.navigate('CarePlan', { elderlyUserId: s.elderlyUserId, elderlyName: s.elderlyName })
+                }
               />
             ))}
 
@@ -157,6 +160,9 @@ export function CaregiverScheduleScreen({ navigation }) {
                 checkoutBlocked={checkoutBlockedId === s.id}
                 onCheckIn={() => handleCheckIn(s.id)}
                 onCheckOut={() => handleCheckOut(s.id)}
+                onViewCarePlan={() =>
+                  navigation.navigate('CarePlan', { elderlyUserId: s.elderlyUserId, elderlyName: s.elderlyName })
+                }
               />
             ))}
           </>
@@ -174,7 +180,7 @@ function EmptyCard({ text }) {
   );
 }
 
-function ScheduleCard({ schedule, busy, checkoutBlocked, onCheckIn, onCheckOut }) {
+function ScheduleCard({ schedule, busy, checkoutBlocked, onCheckIn, onCheckOut, onViewCarePlan }) {
   const notCheckedIn = !schedule.checkInAt;
   const checkedIn = !!schedule.checkInAt && !schedule.checkOutAt;
   const checkedOut = !!schedule.checkOutAt;
@@ -189,6 +195,10 @@ function ScheduleCard({ schedule, busy, checkoutBlocked, onCheckIn, onCheckOut }
       <Text style={styles.cardMeta}>{attendanceStatusLabel(schedule.attendanceStatus)}</Text>
       {checkedOut && duration != null && <Text style={styles.cardMeta}>Duration: {formatDuration(duration)}</Text>}
       {schedule.notes ? <Text style={styles.cardInstructions}>"{schedule.notes}"</Text> : null}
+
+      <Pressable onPress={onViewCarePlan} accessibilityRole="button" style={styles.carePlanLink}>
+        <Text style={styles.carePlanLinkText}>View Care Plan</Text>
+      </Pressable>
 
       {busy && <ActivityIndicator color={colors.primary} style={styles.spinner} />}
 
@@ -239,6 +249,8 @@ const styles = StyleSheet.create({
   cardName: { fontSize: type.heading, fontWeight: '800', color: colors.text },
   cardMeta: { fontSize: type.body - 1, color: colors.textMuted },
   cardInstructions: { fontSize: type.small + 1, color: colors.text, fontStyle: 'italic', marginTop: 4 },
+  carePlanLink: { alignSelf: 'flex-start', paddingVertical: 4 },
+  carePlanLinkText: { fontSize: type.small + 1, fontWeight: '700', color: colors.primary },
   checkInButton: { backgroundColor: colors.success, borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: spacing.sm },
   checkInButtonText: { fontSize: type.body - 1, fontWeight: '800', color: '#FFFFFF' },
   checkOutButton: { backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: spacing.sm },

@@ -561,6 +561,25 @@ export function ElderlyHomeScreen({ navigation }) {
                     <Text style={styles.cardSubtitle}>Scheduled visits and attendance status</Text>
                   </View>
                 </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.carePlanCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('CarePlan', {})}
+                  accessibilityRole="button"
+                  accessibilityLabel="My Care Plan"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#FEF3C7' }]}>
+                    <Text style={styles.cardIconText}>📋</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#B45309' }]}>My Care Plan</Text>
+                    <Text style={styles.cardSubtitle}>Conditions, allergies, medications and notes</Text>
+                  </View>
+                </Pressable>
               </View>
 
               {/* Location & Tracking Controls */}
@@ -979,6 +998,10 @@ const styles = StyleSheet.create({
   caregiverVisitsCard: {
     backgroundColor: '#ECFDF5',
     borderColor: '#047857',
+  },
+  carePlanCard: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#B45309',
   },
   cardIconBadge: {
     width: 46,
