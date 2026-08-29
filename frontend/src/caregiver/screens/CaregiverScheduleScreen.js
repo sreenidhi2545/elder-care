@@ -147,6 +147,23 @@ export function CaregiverScheduleScreen({ navigation }) {
                 onViewCarePlan={() =>
                   navigation.navigate('CarePlan', { elderlyUserId: s.elderlyUserId, elderlyName: s.elderlyName })
                 }
+                onViewTasks={() =>
+                  navigation.navigate('ScheduleTasks', {
+                    scheduleId: s.id,
+                    elderlyUserId: s.elderlyUserId,
+                    elderlyName: s.elderlyName,
+                    caregiverId: s.caregiverId,
+                  })
+                }
+                onLogReport={() =>
+                  navigation.navigate('ReportForm', {
+                    scheduleId: s.id,
+                    caregiverId: s.caregiverId,
+                    elderlyUserId: s.elderlyUserId,
+                    elderlyName: s.elderlyName,
+                    reportDate: s.visitDate,
+                  })
+                }
               />
             ))}
 
@@ -162,6 +179,23 @@ export function CaregiverScheduleScreen({ navigation }) {
                 onCheckOut={() => handleCheckOut(s.id)}
                 onViewCarePlan={() =>
                   navigation.navigate('CarePlan', { elderlyUserId: s.elderlyUserId, elderlyName: s.elderlyName })
+                }
+                onViewTasks={() =>
+                  navigation.navigate('ScheduleTasks', {
+                    scheduleId: s.id,
+                    elderlyUserId: s.elderlyUserId,
+                    elderlyName: s.elderlyName,
+                    caregiverId: s.caregiverId,
+                  })
+                }
+                onLogReport={() =>
+                  navigation.navigate('ReportForm', {
+                    scheduleId: s.id,
+                    caregiverId: s.caregiverId,
+                    elderlyUserId: s.elderlyUserId,
+                    elderlyName: s.elderlyName,
+                    reportDate: s.visitDate,
+                  })
                 }
               />
             ))}
@@ -180,7 +214,7 @@ function EmptyCard({ text }) {
   );
 }
 
-function ScheduleCard({ schedule, busy, checkoutBlocked, onCheckIn, onCheckOut, onViewCarePlan }) {
+function ScheduleCard({ schedule, busy, checkoutBlocked, onCheckIn, onCheckOut, onViewCarePlan, onViewTasks, onLogReport }) {
   const notCheckedIn = !schedule.checkInAt;
   const checkedIn = !!schedule.checkInAt && !schedule.checkOutAt;
   const checkedOut = !!schedule.checkOutAt;
@@ -196,9 +230,20 @@ function ScheduleCard({ schedule, busy, checkoutBlocked, onCheckIn, onCheckOut, 
       {checkedOut && duration != null && <Text style={styles.cardMeta}>Duration: {formatDuration(duration)}</Text>}
       {schedule.notes ? <Text style={styles.cardInstructions}>"{schedule.notes}"</Text> : null}
 
-      <Pressable onPress={onViewCarePlan} accessibilityRole="button" style={styles.carePlanLink}>
-        <Text style={styles.carePlanLinkText}>View Care Plan</Text>
-      </Pressable>
+      <View style={styles.linkRow}>
+        <Pressable onPress={onViewCarePlan} accessibilityRole="button" style={styles.carePlanLink}>
+          <Text style={styles.carePlanLinkText}>Care Plan</Text>
+        </Pressable>
+        <Pressable onPress={onViewTasks} accessibilityRole="button" style={styles.carePlanLink}>
+          <Text style={styles.carePlanLinkText}>Tasks</Text>
+        </Pressable>
+      </View>
+
+      {checkedOut && (
+        <Pressable onPress={onLogReport} accessibilityRole="button" style={styles.reportButton}>
+          <Text style={styles.reportButtonText}>Log Activity Report</Text>
+        </Pressable>
+      )}
 
       {busy && <ActivityIndicator color={colors.primary} style={styles.spinner} />}
 
@@ -249,8 +294,18 @@ const styles = StyleSheet.create({
   cardName: { fontSize: type.heading, fontWeight: '800', color: colors.text },
   cardMeta: { fontSize: type.body - 1, color: colors.textMuted },
   cardInstructions: { fontSize: type.small + 1, color: colors.text, fontStyle: 'italic', marginTop: 4 },
-  carePlanLink: { alignSelf: 'flex-start', paddingVertical: 4 },
+  linkRow: { flexDirection: 'row', gap: spacing.md },
+  carePlanLink: { paddingVertical: 4 },
   carePlanLinkText: { fontSize: type.small + 1, fontWeight: '700', color: colors.primary },
+  reportButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
+  },
+  reportButtonText: { fontSize: type.body - 1, fontWeight: '800', color: colors.primary },
   checkInButton: { backgroundColor: colors.success, borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: spacing.sm },
   checkInButtonText: { fontSize: type.body - 1, fontWeight: '800', color: '#FFFFFF' },
   checkOutButton: { backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: spacing.sm },

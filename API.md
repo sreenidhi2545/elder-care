@@ -2018,6 +2018,233 @@ Every field optional, at least one required. Same shape and rules as create, min
 
 ---
 
+## Tasks (Phase 4)
+
+A `tasks` row is one to-do item for an elderly user, optionally assigned to a caregiver and/or tied to a `carePlanId` / `scheduleId`.
+
+**Permission model.** Create: the elderly user themselves, a family member with `hasManageCaregiversPermission`, admin, **or the caregiver being assigned to it, self-assigning only** — `assignedToCaregiverId` must resolve to the caller's own caregiver profile (`isAssignedCaregiver`, checked against the caller). A caregiver cannot assign a task to a different caregiver, or create one with no `assignedToCaregiverId` at all (that branch of `requireTaskCreatePermission` only fires when `assignedToCaregiverId` is present). Read and status updates share one permission function: the elderly user, the assigned caregiver, `hasManageCaregiversPermission` family, or admin.
+
+### `POST /caregiver/tasks`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `elderlyUserId` | UUID | **yes** | |
+| `carePlanId` | UUID | no | |
+| `assignedToCaregiverId` | UUID | no | |
+| `scheduleId` | UUID | no | |
+| `title` | string | **yes** | 1-150 chars |
+| `description` | string | no | |
+| `category` | string | no | |
+| `priority` | string | no | `low` \| `normal` \| `high`, defaults to `normal` |
+| `dueDate` | string | no | `YYYY-MM-DD` |
+| `dueTime` | string | no | `HH:MM` or `HH:MM:SS` |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "task": {
+    "id": "4c7a1e2b-...",
+    "carePlanId": null,
+    "carePlanTitle": null,
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "assignedToCaregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "assignedByUserId": "2e4fe1ff-...",
+    "assignedByName": "Ramesh Kumar",
+    "scheduleId": "3f1e2a9b-...",
+    "title": "Give afternoon medication",
+    "description": null,
+    "category": null,
+    "priority": "normal",
+    "dueDate": null,
+    "dueTime": null,
+    "recurrence": "none",
+    "status": "pending",
+    "completedAt": null,
+    "completedBy": null,
+    "completedByName": null,
+    "completionNotes": null,
+    "createdAt": "2026-08-29T10:00:00.000Z",
+    "updatedAt": "2026-08-29T10:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`.
+
+---
+
+### `GET /caregiver/tasks`
+
+**Query parameters (all optional):** `caregiverId`, `elderlyUserId`, `carePlanId`, `scheduleId`, `status` (`pending`/`in_progress`/`completed`/`skipped`/`cancelled`), `dueDate`.
+
+**Response `200`** — `{ "status": "ok", "count": 1, "tasks": [ { "...": "same shape as above" } ] }`, ordered by due date/time ascending (nulls last), then newest-created first.
+
+---
+
+### `GET /caregiver/tasks/:id`
+
+**Response `200`** — the task. **Errors:** `403 not_permitted`, `404 task_not_found`.
+
+---
+
+### `PATCH /caregiver/tasks/:id/status`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `status` | string | **yes** | `pending` \| `in_progress` \| `completed` \| `skipped` \| `cancelled` |
+| `completionNotes` | string | no | |
+
+Setting `status: "completed"` stamps `completedAt`/`completedBy` server-side; any other status leaves those columns as they were.
+
+**Response `200`** — the updated task. **Errors:** `400 validation_failed`, `403 not_permitted`, `404 task_not_found`.
+
+---
+
+## Activity Reports (Phase 4)
+
+An `activity_reports` row is one caregiver's account of one visit: a required `summary`, plus optional meals/medications/mood/sleep/concerns. **`vitals` (JSONB) and `photoUrls` (array of URLs) exist as columns but have no client anywhere in this app that can populate them** — no vitals-entry UI and no file upload exist. Every report created through this app is qualitative text only. Flagged for whoever owns the product spec next; not attempted here. See `BUILD_LOG.md`.
+
+**One report per caregiver, per elderly user, per calendar day** — `uq_report_per_day UNIQUE (caregiver_id, elderly_user_id, report_date)`. This is a real data-model limitation, not a client-side rule: if the same caregiver has two separate visits with the same elderly user on the same day, the second `POST` 409s as `duplicate_report` regardless of which `scheduleId` it names. There is also no `scheduleId` filter on `GET /caregiver/reports` — a report is looked up by `caregiverId` + `elderlyUserId` + date range, the same key the uniqueness constraint uses, not by which visit it came from.
+
+**Permission model.** Create: the caregiver named in `caregiverId` must be the caller's own profile, or admin — never on another caregiver's behalf. Read: the elderly user, the reporting caregiver, `hasManageCaregiversPermission` family, or admin.
+
+### `POST /caregiver/reports`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `caregiverId` | UUID | **yes** | Must be the caller's own caregiver profile |
+| `elderlyUserId` | UUID | **yes** | |
+| `scheduleId` | UUID | no | |
+| `carePlanId` | UUID | no | |
+| `reportDate` | string | **yes** | `YYYY-MM-DD` |
+| `summary` | string | **yes** | |
+| `mealsTaken` | string | no | |
+| `medicationsGiven` | string | no | |
+| `mood` | string | no | |
+| `sleepHours` | number | no | 0-24 |
+| `concerns` | string | no | |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "report": {
+    "id": "9d3f2c1a-...",
+    "scheduleId": "3f1e2a9b-...",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "caregiverPhone": "+919876500000",
+    "elderlyUserId": "2e4fe1ff-...",
+    "elderlyName": "Ramesh Kumar",
+    "carePlanId": null,
+    "carePlanTitle": null,
+    "reportDate": "2026-09-15",
+    "summary": "Pleasant afternoon, took a short walk, ate well.",
+    "mealsTaken": "Lunch and a snack",
+    "medicationsGiven": "Metformin at 2pm",
+    "mood": "Cheerful",
+    "sleepHours": null,
+    "vitals": null,
+    "concerns": null,
+    "photoUrls": [],
+    "createdAt": "2026-09-15T14:30:00.000Z",
+    "updatedAt": "2026-09-15T14:30:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`, `409 duplicate_report`.
+
+---
+
+### `GET /caregiver/reports`
+
+**Query parameters (all optional):** `elderlyUserId`, `caregiverId`, `startDate`, `endDate`.
+
+**Response `200`** — `{ "status": "ok", "count": 1, "reports": [ { "...": "same shape as above" } ] }`, newest report-date first.
+
+---
+
+### `GET /caregiver/reports/:id`
+
+**Response `200`** — the report. **Errors:** `403 not_permitted`, `404 report_not_found`.
+
+---
+
+## Reviews (Phase 4)
+
+A `reviews` row is a 1-5 star rating (plus optional punctuality/care-quality/communication sub-ratings and a comment) tied to one completed booking. **There is no `PATCH` endpoint** — `uq_review_per_booking UNIQUE (booking_id, reviewer_user_id)` makes a review create-once by design, not an editable draft.
+
+**Permission model.** The booking named by `bookingId` is looked up server-side (never trusted from the client) and must belong to the `caregiverId` being reviewed and have `status: "completed"` — a review cannot be left about a caregiver with no completed history, and `elderlyUserId` is derived from that booking, not accepted from the request body. Permitted reviewers: the booking's elderly user, whoever made the booking, a family member with `hasManageCaregiversPermission` for that elderly user, or admin.
+
+Submitting a review also recalculates `caregivers.average_rating`/`total_reviews` from all `is_visible = true` reviews for that caregiver, in the same request.
+
+### `POST /caregiver/reviews`
+
+**Request body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `caregiverId` | UUID | **yes** | |
+| `bookingId` | UUID | **yes** | Must be `completed`, and with this caregiver |
+| `rating` | integer | **yes** | 1-5 |
+| `punctualityRating` | integer | no | 1-5 |
+| `careQualityRating` | integer | no | 1-5 |
+| `communicationRating` | integer | no | 1-5 |
+| `comment` | string | no | |
+
+**Response `201`**
+
+```json
+{
+  "status": "ok",
+  "review": {
+    "id": "5b8e0d3f-...",
+    "caregiverId": "7c9e6f3a-...",
+    "caregiverName": "Asha Devi",
+    "bookingId": "9b2e6f3a-...",
+    "reviewerUserId": "2e4fe1ff-...",
+    "reviewerName": "Ramesh Kumar",
+    "elderlyUserId": "2e4fe1ff-...",
+    "rating": 5,
+    "punctualityRating": 5,
+    "careQualityRating": 5,
+    "communicationRating": 4,
+    "comment": "Very attentive and punctual.",
+    "isVisible": true,
+    "createdAt": "2026-09-20T09:00:00.000Z",
+    "updatedAt": "2026-09-20T09:00:00.000Z"
+  }
+}
+```
+
+**Errors:** `400 validation_failed`, `403 not_permitted`, `404 booking_not_found`, `409 booking_not_eligible` (wrong caregiver, or not `completed`), `409 duplicate_review`.
+
+---
+
+### `GET /caregiver/reviews/caregiver/:caregiverId`
+
+**Response `200`** — `{ "status": "ok", "count": 1, "reviews": [ { "...": "same shape as above" } ] }`, visible reviews only, newest first.
+
+---
+
+### `GET /caregiver/reviews/:id`
+
+**Response `200`** — the review. **Errors:** `404 review_not_found`.
+
+---
+
 ## Known limitations
 
 **Pre-registration invites do not work.** `POST /family/invites` can only invite someone who has already registered an account — the invitee is looked up by phone, and an unregistered number returns `404 invitee_not_registered`. For real users this is the common case, not an edge case: a daughter installs the app for her mother, then wants to invite a brother who has nothing installed yet. Today he has to register first, then be invited. Building pre-registration invites (an invite record keyed on a phone number rather than a user id, resolved and turned into a real `family_links` row the moment that phone number registers) is a real feature, not a quick fix — it needs its own table or a nullable `family_user_id`, a way to notify the inviter once the invite resolves, and a decision on how long an unclaimed invite stays valid. Not attempted here.

@@ -125,6 +125,23 @@ export function VisitsScreen({ navigation }) {
                 canVerify={canVerify}
                 verified={verifiedIds.has(s.id)}
                 onVerify={() => handleVerify(s)}
+                onViewTasks={() =>
+                  navigation.navigate('ScheduleTasks', {
+                    scheduleId: s.id,
+                    elderlyUserId: s.elderlyUserId,
+                    elderlyName: s.elderlyName,
+                    caregiverId: s.caregiverId,
+                  })
+                }
+                onViewReport={() =>
+                  navigation.navigate('Report', {
+                    elderlyUserId: s.elderlyUserId,
+                    caregiverId: s.caregiverId,
+                    elderlyName: s.elderlyName,
+                    caregiverName: s.caregiverName,
+                    visitDate: s.visitDate,
+                  })
+                }
               />
             ))}
 
@@ -138,6 +155,23 @@ export function VisitsScreen({ navigation }) {
                 canVerify={canVerify}
                 verified={verifiedIds.has(s.id)}
                 onVerify={() => handleVerify(s)}
+                onViewTasks={() =>
+                  navigation.navigate('ScheduleTasks', {
+                    scheduleId: s.id,
+                    elderlyUserId: s.elderlyUserId,
+                    elderlyName: s.elderlyName,
+                    caregiverId: s.caregiverId,
+                  })
+                }
+                onViewReport={() =>
+                  navigation.navigate('Report', {
+                    elderlyUserId: s.elderlyUserId,
+                    caregiverId: s.caregiverId,
+                    elderlyName: s.elderlyName,
+                    caregiverName: s.caregiverName,
+                    visitDate: s.visitDate,
+                  })
+                }
               />
             ))}
           </>
@@ -155,7 +189,7 @@ function EmptyCard({ text }) {
   );
 }
 
-function VisitCard({ schedule, busy, canVerify, verified, onVerify }) {
+function VisitCard({ schedule, busy, canVerify, verified, onVerify, onViewTasks, onViewReport }) {
   const checkedOut = !!schedule.checkOutAt;
   const duration = checkedOut ? computeDurationMinutes(schedule.checkInAt, schedule.checkOutAt) : null;
   const showVerify = canVerify && checkedOut && !verified;
@@ -169,6 +203,17 @@ function VisitCard({ schedule, busy, canVerify, verified, onVerify }) {
       <Text style={styles.cardMeta}>{attendanceStatusLabel(schedule.attendanceStatus)}</Text>
       {checkedOut && duration != null && <Text style={styles.cardMeta}>Duration: {formatDuration(duration)}</Text>}
       {verified && <Text style={styles.verifiedText}>✓ Verified</Text>}
+
+      <View style={styles.linkRow}>
+        <Pressable onPress={onViewTasks} accessibilityRole="button" style={styles.taskLink}>
+          <Text style={styles.taskLinkText}>Tasks</Text>
+        </Pressable>
+        {checkedOut && (
+          <Pressable onPress={onViewReport} accessibilityRole="button" style={styles.taskLink}>
+            <Text style={styles.taskLinkText}>Activity Report</Text>
+          </Pressable>
+        )}
+      </View>
 
       {busy && <ActivityIndicator color={colors.primary} style={styles.spinner} />}
 
@@ -204,6 +249,9 @@ const styles = StyleSheet.create({
   cardName: { fontSize: type.heading, fontWeight: '800', color: colors.text },
   cardMeta: { fontSize: type.body - 1, color: colors.textMuted },
   verifiedText: { fontSize: type.body - 1, fontWeight: '800', color: colors.success, marginTop: 4 },
+  linkRow: { flexDirection: 'row', gap: spacing.md },
+  taskLink: { paddingVertical: 4 },
+  taskLinkText: { fontSize: type.small + 1, fontWeight: '700', color: colors.primary },
   verifyButton: { backgroundColor: colors.success, borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: spacing.sm },
   verifyButtonText: { fontSize: type.body - 1, fontWeight: '800', color: '#FFFFFF' },
 });

@@ -77,6 +77,17 @@ export function BookingsScreen({ navigation }) {
     return booking.bookedByUserId === user.id;
   }
 
+  // Reviewing mirrors the same conservative ownership check — createReview
+  // (backend) also permits a manage-tier family member regardless of who
+  // booked it, but that flag isn't checkable client-side any more than it is
+  // for care plans or scheduling, so this stays the same hide-if-uncertain
+  // rule as canCancel/canSchedule rather than over-showing the button.
+  function canReview(booking) {
+    if (booking.status !== 'completed') return false;
+    if (user.role === 'elderly') return booking.elderlyUserId === user.id;
+    return booking.bookedByUserId === user.id;
+  }
+
   async function handleCancel(id) {
     setBusyId(id);
     try {
@@ -170,7 +181,22 @@ export function BookingsScreen({ navigation }) {
           <>
             <Text style={styles.sectionHeading}>Past</Text>
             {past.map((b) => (
-              <BookingRow key={b.id} booking={b} busy={false} canCancel={false} canSchedule={false} confirming={false} />
+              <BookingRow
+                key={b.id}
+                booking={b}
+                busy={false}
+                canCancel={false}
+                canSchedule={false}
+                canReview={canReview(b)}
+                confirming={false}
+                onReview={() =>
+                  navigation.navigate('ReviewForm', {
+                    bookingId: b.id,
+                    caregiverId: b.caregiverId,
+                    caregiverName: b.caregiverName,
+                  })
+                }
+              />
             ))}
           </>
         )}
@@ -179,7 +205,19 @@ export function BookingsScreen({ navigation }) {
   );
 }
 
-function BookingRow({ booking, busy, canCancel, canSchedule, confirming, onRequestCancel, onBackOut, onConfirmCancel, onSchedule }) {
+function BookingRow({
+  booking,
+  busy,
+  canCancel,
+  canSchedule,
+  canReview,
+  confirming,
+  onRequestCancel,
+  onBackOut,
+  onConfirmCancel,
+  onSchedule,
+  onReview,
+}) {
   return (
     <View style={styles.card}>
       <Text style={styles.cardName}>{booking.caregiverName}</Text>
@@ -195,6 +233,12 @@ function BookingRow({ booking, busy, canCancel, canSchedule, confirming, onReque
       {!busy && canSchedule && !confirming && (
         <Pressable onPress={onSchedule} accessibilityRole="button" style={styles.scheduleButton}>
           <Text style={styles.scheduleButtonText}>Schedule Visit</Text>
+        </Pressable>
+      )}
+
+      {!busy && canReview && (
+        <Pressable onPress={onReview} accessibilityRole="button" style={styles.reviewButton}>
+          <Text style={styles.reviewButtonText}>Leave a Review</Text>
         </Pressable>
       )}
 
@@ -253,6 +297,15 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   scheduleButtonText: { fontSize: type.body - 1, fontWeight: '800', color: '#FFFFFF' },
+  reviewButton: {
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  reviewButtonText: { fontSize: type.body - 1, fontWeight: '800', color: colors.primary },
   cancelButton: {
     borderRadius: 12,
     borderWidth: 1.5,

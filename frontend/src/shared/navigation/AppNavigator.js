@@ -31,6 +31,11 @@ import { VisitsScreen } from '../../caregiver/screens/VisitsScreen';
 import { ScheduleVisitScreen } from '../../caregiver/screens/ScheduleVisitScreen';
 import { CarePlanScreen } from '../../caregiver/screens/CarePlanScreen';
 import { CarePlanFormScreen } from '../../caregiver/screens/CarePlanFormScreen';
+import { ScheduleTasksScreen } from '../../caregiver/screens/ScheduleTasksScreen';
+import { TaskFormScreen } from '../../caregiver/screens/TaskFormScreen';
+import { ReportScreen } from '../../caregiver/screens/ReportScreen';
+import { ReportFormScreen } from '../../caregiver/screens/ReportFormScreen';
+import { ReviewFormScreen } from '../../caregiver/screens/ReviewFormScreen';
 import { ManageFamilyScreen } from '../../family/screens/ManageFamilyScreen';
 import { FamilyLinksScreen } from '../../family/screens/FamilyLinksScreen';
 import { useAuth } from '../auth/AuthContext';
@@ -62,6 +67,10 @@ function ElderlyNavigator() {
       <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
       <Stack.Screen name="CarePlan" component={CarePlanScreen} />
       <Stack.Screen name="CarePlanForm" component={CarePlanFormScreen} />
+      <Stack.Screen name="ScheduleTasks" component={ScheduleTasksScreen} />
+      <Stack.Screen name="TaskForm" component={TaskFormScreen} />
+      <Stack.Screen name="Report" component={ReportScreen} />
+      <Stack.Screen name="ReviewForm" component={ReviewFormScreen} />
     </Stack.Navigator>
   );
 }
@@ -87,6 +96,10 @@ function FamilyNavigator() {
       <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
       <Stack.Screen name="CarePlan" component={CarePlanScreen} />
       <Stack.Screen name="CarePlanForm" component={CarePlanFormScreen} />
+      <Stack.Screen name="ScheduleTasks" component={ScheduleTasksScreen} />
+      <Stack.Screen name="TaskForm" component={TaskFormScreen} />
+      <Stack.Screen name="Report" component={ReportScreen} />
+      <Stack.Screen name="ReviewForm" component={ReviewFormScreen} />
     </Stack.Navigator>
   );
 }
@@ -100,6 +113,9 @@ function CaregiverNavigator() {
       <Stack.Screen name="CaregiverSchedule" component={CaregiverScheduleScreen} />
       <Stack.Screen name="ScheduleVisit" component={ScheduleVisitScreen} />
       <Stack.Screen name="CarePlan" component={CarePlanScreen} />
+      <Stack.Screen name="ScheduleTasks" component={ScheduleTasksScreen} />
+      <Stack.Screen name="Report" component={ReportScreen} />
+      <Stack.Screen name="ReportForm" component={ReportFormScreen} />
     </Stack.Navigator>
   );
 }

@@ -12,6 +12,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { getCaregiverById } from '../api/caregivers';
+import { listReviewsForCaregiver } from '../api/reviews';
 import { NetworkError } from '../../shared/api/client';
 import { colors, spacing, type } from '../../shared/ui/theme';
 
@@ -19,14 +20,19 @@ export function CaregiverDetailScreen({ navigation, route }) {
   const { caregiverId, elderlyUserId, elderlyName } = route.params;
 
   const [caregiver, setCaregiver] = useState(null);
+  const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { caregiver: cg } = await getCaregiverById(caregiverId);
+      const [{ caregiver: cg }, { reviews: reviewList }] = await Promise.all([
+        getCaregiverById(caregiverId),
+        listReviewsForCaregiver(caregiverId),
+      ]);
       setCaregiver(cg);
+      setReviews(reviewList);
       setBanner(null);
     } catch (err) {
       setBanner({
@@ -83,6 +89,18 @@ export function CaregiverDetailScreen({ navigation, route }) {
                 <Text style={styles.bioText}>{caregiver.bio}</Text>
               </View>
             ) : null}
+
+            <View style={styles.card}>
+              <Text style={styles.cardHeading}>Reviews</Text>
+              {reviews.length === 0 && <Text style={styles.bioText}>No reviews yet.</Text>}
+              {reviews.map((r) => (
+                <View key={r.id} style={styles.reviewRow}>
+                  <Text style={styles.reviewStars}>{'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}</Text>
+                  <Text style={styles.reviewAuthor}>{r.reviewerName}</Text>
+                  {r.comment ? <Text style={styles.reviewComment}>{r.comment}</Text> : null}
+                </View>
+              ))}
+            </View>
 
             {!caregiver.isAvailable && (
               <View style={styles.noticeCard}>
@@ -150,6 +168,10 @@ const styles = StyleSheet.create({
   },
   cardHeading: { fontSize: type.body - 1, fontWeight: '800', color: colors.text },
   bioText: { fontSize: type.body - 1, color: colors.text, lineHeight: 22 },
+  reviewRow: { gap: 2, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing.sm, marginTop: spacing.sm },
+  reviewStars: { fontSize: type.body, color: '#F59E0B' },
+  reviewAuthor: { fontSize: type.small, fontWeight: '700', color: colors.textMuted },
+  reviewComment: { fontSize: type.body - 1, color: colors.text, lineHeight: 21, marginTop: 2 },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   detailLabel: { fontSize: type.body - 1, color: colors.textMuted, fontWeight: '600' },
   detailValue: { fontSize: type.body - 1, color: colors.text, flexShrink: 1, textAlign: 'right' },
