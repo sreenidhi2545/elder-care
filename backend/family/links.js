@@ -264,6 +264,26 @@ export async function hasManageGeofencesPermission(actorUserId, elderlyUserId) {
 }
 
 /**
+ * Read+write access to the caregiver module (bookings, schedules, care
+ * plans, tasks, activity reports, verifying attendance) on an elderly user's
+ * behalf: the elderly user themselves, or a family member with an active
+ * link and can_manage_caregivers = true. One flag rather than the
+ * view/manage split geofences uses — the caregiver module has no separate
+ * "can see but not act" tier today, only "participates in this person's
+ * caregiver arrangement or doesn't." can_manage_caregivers already existed
+ * on family_links and was grantable via POST /family/invites and PATCH
+ * /family/links/:id before this — it just gated nothing yet.
+ */
+export async function hasManageCaregiversPermission(actorUserId, elderlyUserId) {
+  if (actorUserId === elderlyUserId) return true;
+  const link = await findActiveLink(actorUserId, elderlyUserId);
+  return (
+    !!link &&
+    link.can_manage_caregivers === true
+  );
+}
+
+/**
  * Elderly-only edit of an active link's permission fields — this is the
  * surgical undo for granting 'manage'/'owner' (geofence-write access, among
  * other things): step the tier back down without severing the whole

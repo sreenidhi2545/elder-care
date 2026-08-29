@@ -290,6 +290,62 @@ export function validateCarePlan(body = {}) {
   };
 }
 
+/**
+ * PATCH /care-plans/:id — every field optional, at least one required, same
+ * per-field rules as validateCarePlan. Used to exist as a raw `req.body`
+ * passed straight to updateCarePlan; a bad `status` reached the database as
+ * an enum-cast error instead of a clean 400. elderlyUserId is not editable
+ * here — a care plan does not change whose it is.
+ */
+export function validateUpdateCarePlan(body = {}) {
+  const {
+    title,
+    description,
+    medicalConditions,
+    allergies,
+    medications,
+    dietaryNotes,
+    mobilityNotes,
+    emergencyInstructions,
+    startDate,
+    endDate,
+    status,
+  } = body;
+
+  const anyFieldProvided = [
+    title, description, medicalConditions, allergies, medications,
+    dietaryNotes, mobilityNotes, emergencyInstructions, startDate, endDate, status,
+  ].some((v) => v !== undefined);
+
+  const errors = fieldErrors([
+    { when: !anyFieldProvided, field: 'body', message: 'At least one field must be provided.' },
+    { when: title !== undefined && (typeof title !== 'string' || title.trim().length === 0), field: 'title', message: 'Title must be 1-150 characters.' },
+    { when: typeof title === 'string' && title.trim().length > 150, field: 'title', message: 'Title must be 150 chars or fewer.' },
+    { when: startDate !== undefined && startDate !== null && !DATE_RE.test(startDate), field: 'startDate', message: 'startDate must be in YYYY-MM-DD format.' },
+    { when: endDate !== undefined && endDate !== null && !DATE_RE.test(endDate), field: 'endDate', message: 'endDate must be in YYYY-MM-DD format.' },
+    { when: startDate && endDate && endDate < startDate, field: 'endDate', message: 'endDate cannot be earlier than startDate.' },
+    { when: status !== undefined && !VALID_CARE_PLAN_STATUSES.includes(status), field: 'status', message: `status must be one of: ${VALID_CARE_PLAN_STATUSES.join(', ')}.` },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'Invalid care plan data.', { details: errors });
+  }
+
+  const result = {};
+  if (title !== undefined) result.title = title.trim();
+  if (description !== undefined) result.description = typeof description === 'string' ? description.trim() : null;
+  if (medicalConditions !== undefined) result.medicalConditions = typeof medicalConditions === 'string' ? medicalConditions.trim() : null;
+  if (allergies !== undefined) result.allergies = typeof allergies === 'string' ? allergies.trim() : null;
+  if (medications !== undefined) result.medications = typeof medications === 'string' ? medications.trim() : null;
+  if (dietaryNotes !== undefined) result.dietaryNotes = typeof dietaryNotes === 'string' ? dietaryNotes.trim() : null;
+  if (mobilityNotes !== undefined) result.mobilityNotes = typeof mobilityNotes === 'string' ? mobilityNotes.trim() : null;
+  if (emergencyInstructions !== undefined) result.emergencyInstructions = typeof emergencyInstructions === 'string' ? emergencyInstructions.trim() : null;
+  if (startDate !== undefined) result.startDate = startDate || null;
+  if (endDate !== undefined) result.endDate = endDate || null;
+  if (status !== undefined) result.status = status;
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // 6. Tasks Validation
 // ---------------------------------------------------------------------------
@@ -410,7 +466,6 @@ export function validateCreateReview(body = {}) {
   const {
     caregiverId,
     bookingId,
-    elderlyUserId,
     rating,
     punctualityRating,
     careQualityRating,
@@ -424,10 +479,12 @@ export function validateCreateReview(body = {}) {
     message: `${field} must be an integer between 1 and 5.`,
   });
 
+  // bookingId is required — a review must point at a real, completed booking
+  // with this caregiver (checked in reviews.service.js, which also derives
+  // elderlyUserId from that booking rather than trusting it from the client).
   const errors = fieldErrors([
     { when: !isUuid(caregiverId), field: 'caregiverId', message: 'Valid caregiverId is required.' },
-    { when: bookingId && !isUuid(bookingId), field: 'bookingId', message: 'bookingId must be a valid UUID.' },
-    { when: elderlyUserId && !isUuid(elderlyUserId), field: 'elderlyUserId', message: 'elderlyUserId must be a valid UUID.' },
+    { when: !isUuid(bookingId), field: 'bookingId', message: 'Valid bookingId is required.' },
     { when: typeof rating !== 'number' || !Number.isInteger(rating) || rating < 1 || rating > 5, field: 'rating', message: 'Rating is required and must be an integer between 1 and 5.' },
     checkRating(punctualityRating, 'punctualityRating'),
     checkRating(careQualityRating, 'careQualityRating'),
@@ -440,8 +497,7 @@ export function validateCreateReview(body = {}) {
 
   return {
     caregiverId,
-    bookingId: bookingId || null,
-    elderlyUserId: elderlyUserId || null,
+    bookingId,
     rating,
     punctualityRating: punctualityRating ?? null,
     careQualityRating: careQualityRating ?? null,

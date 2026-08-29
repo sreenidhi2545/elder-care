@@ -3,7 +3,9 @@
 // ============================================================================
 
 import { query } from '../../shared/db/pool.js';
-import { notFound, conflict } from '../../shared/http/errors.js';
+import { notFound, conflict, forbidden } from '../../shared/http/errors.js';
+import { findBookingById } from './bookings.service.js';
+import { hasManageCaregiversPermission } from '../../family/links.js';
 
 export function toReviewResponse(row) {
   if (!row) return null;
@@ -36,17 +38,45 @@ const REVIEW_SELECT = `
     JOIN users ru ON ru.id = rv.reviewer_user_id
 `;
 
-export async function createReview(data, reviewerUserId) {
+/**
+ * A review must point at a real, completed booking with the caregiver being
+ * reviewed — bookingId is required (validate.js), checked here rather than
+ * trusted. elderlyUserId comes from the booking, not the client, closing off
+ * both the drive-by-review gap (no relationship required) and the
+ * unverified-elderlyUserId gap that came with it. Permitted reviewers: the
+ * booking's elderly user, whoever made the booking, a family member with
+ * hasManageCaregiversPermission for that elderly user, or an admin.
+ */
+export async function createReview(data, user) {
   const {
     caregiverId,
     bookingId,
-    elderlyUserId,
     rating,
     punctualityRating,
     careQualityRating,
     communicationRating,
     comment,
   } = data;
+
+  const booking = await findBookingById(bookingId); // throws 404 booking_not_found
+
+  if (booking.caregiverId !== caregiverId) {
+    throw conflict('booking_not_eligible', 'This booking is not with the caregiver being reviewed.');
+  }
+  if (booking.status !== 'completed') {
+    throw conflict('booking_not_eligible', 'You can only review a caregiver after a completed booking with them.');
+  }
+
+  let permitted = booking.elderlyUserId === user.id || booking.bookedByUserId === user.id || user.role === 'admin';
+  if (!permitted) {
+    permitted = await hasManageCaregiversPermission(user.id, booking.elderlyUserId);
+  }
+  if (!permitted) {
+    throw forbidden('not_permitted', 'You are not permitted to review this booking.');
+  }
+
+  const reviewerUserId = user.id;
+  const elderlyUserId = booking.elderlyUserId;
 
   try {
     const { rows } = await query(
