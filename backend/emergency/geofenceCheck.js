@@ -35,30 +35,12 @@ import { query } from '../shared/db/pool.js';
 import { listGeofencesForUser } from './geofences.js';
 import { createGeofenceAlert, autoResolveGeofenceAlert } from './alerts.js';
 import { advanceFanout } from './notifications/fanout.js';
-
-const EARTH_RADIUS_METERS = 6371000;
+import { haversineMeters, classify } from './geofenceMath.js';
 
 // Applied when a reading has no accuracy_meters of its own to judge
 // confidence by — conservative enough to absorb ordinary consumer-GPS jitter
 // without being so wide that a real, sustained move stops registering as one.
 const DEFAULT_ACCURACY_MARGIN_METERS = 20;
-
-function toRadians(degrees) {
-  return (degrees * Math.PI) / 180;
-}
-
-/** Great-circle distance between two points, in metres. No PostGIS — matches schema.sql's own choice for `geofences`. */
-function haversineMeters(lat1, lon1, lat2, lon2) {
-  const dLat = toRadians(lat2 - lat1);
-  const dLon = toRadians(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_METERS * Math.asin(Math.sqrt(a));
-}
-
-function classify(distanceMeters, radiusMeters) {
-  return distanceMeters <= radiusMeters ? 'inside' : 'outside';
-}
 
 async function findPreviousLocation(userId, beforeRecordedAt) {
   const { rows } = await query(

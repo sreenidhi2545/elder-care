@@ -183,6 +183,22 @@ export function FamilyLinksScreen({ navigation }) {
                 {link.canViewLocation ? 'You can see their location.' : "You don't have access to their location."}
               </Text>
 
+              {link.canViewLocation && (
+                <Pressable
+                  onPress={() =>
+                    navigation.navigate('Geofences', {
+                      elderlyUserId: link.elderlyUserId,
+                      elderlyName: link.elderlyUser?.fullName || null,
+                      canManage: link.permissionLevel === 'manage' || link.permissionLevel === 'owner',
+                    })
+                  }
+                  accessibilityRole="button"
+                  style={styles.zonesButton}
+                >
+                  <Text style={styles.zonesButtonText}>Safe Zones</Text>
+                </Pressable>
+              )}
+
               {leavingId === link.id ? (
                 <ActivityIndicator color={colors.danger} style={styles.spinner} />
               ) : confirmLeaveId === link.id ? (
@@ -265,6 +281,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   leaveButtonText: { fontSize: type.body - 1, fontWeight: '800', color: colors.danger },
+  zonesButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
+  },
+  zonesButtonText: { fontSize: type.body - 1, fontWeight: '800', color: colors.primary },
   confirmBlock: { gap: spacing.sm },
   confirmText: { fontSize: type.body - 1, fontWeight: '700', color: colors.text, lineHeight: 22 },
   confirmButtons: { flexDirection: 'row', gap: spacing.sm },

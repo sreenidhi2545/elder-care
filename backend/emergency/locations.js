@@ -47,3 +47,30 @@ export async function createLocation(
   );
   return rows[0];
 }
+
+/**
+ * Most recent reading for this user, or null if they have none yet. Used by
+ * GET /emergency/locations/latest — the source for a family member's "use
+ * their last known location" zone-centre flow, since a family member's own
+ * device position is never a stand-in for the elderly user's.
+ */
+export async function findLatestLocation(userId) {
+  const { rows } = await query(
+    `SELECT * FROM locations WHERE user_id = $1 ORDER BY recorded_at DESC LIMIT 1`,
+    [userId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Every reading for this user at or after `sinceDate`, oldest first — feeds
+ * GET /emergency/geofences/:id/history's inside/outside tally. Same
+ * (user_id, recorded_at) index the unique constraint already provides.
+ */
+export async function listLocationsSince(userId, sinceDate) {
+  const { rows } = await query(
+    `SELECT * FROM locations WHERE user_id = $1 AND recorded_at >= $2 ORDER BY recorded_at ASC`,
+    [userId, sinceDate]
+  );
+  return rows;
+}

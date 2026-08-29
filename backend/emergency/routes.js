@@ -10,11 +10,13 @@
 //   GET  /emergency/family/alerts        active alerts for linked elderly users
 //   GET  /emergency/family/alerts/history recent resolved/cancelled alerts, last 7 days
 //   POST /emergency/locations            record one GPS reading
+//   GET  /emergency/locations/latest     most recent reading for an elderly user
 //   POST /emergency/device-tokens        register this device for push
 //   POST /emergency/geofences            define a safe (or restricted) zone
 //   GET  /emergency/geofences            list zones for an elderly user
 //   PATCH /emergency/geofences/:id       edit a zone
 //   DELETE /emergency/geofences/:id      soft-delete a zone
+//   GET  /emergency/geofences/:id/history  recent inside/outside tally for one zone
 //
 // Phase 1, step 3: emergency contact notification and escalation.
 // Phase 3, step 3: geofencing — breach detection lives in geofenceCheck.js,
@@ -40,7 +42,7 @@ import {
   listActiveFamilyAlerts,
   listFamilyAlertHistory,
 } from './alerts.js';
-import { createLocation, toPublicLocation } from './locations.js';
+import { createLocation, toPublicLocation, findLatestLocation, listLocationsSince } from './locations.js';
 import { registerDeviceToken } from './deviceTokens.js';
 import { advanceFanout } from './notifications/fanout.js';
 import { broadcastToFamily } from './notifications/broadcast.js';
@@ -64,7 +66,8 @@ import {
   deactivateGeofence,
 } from './geofences.js';
 import { checkGeofences } from './geofenceCheck.js';
-import { hasManageContactsPermission, hasViewGeofencesPermission, hasManageGeofencesPermission } from '../family/links.js';
+import { haversineMeters, classify } from './geofenceMath.js';
+import { hasManageContactsPermission, hasViewLocationPermission, hasManageGeofencesPermission } from '../family/links.js';
 import {
   validateListQuery,
   validateCloseAlertBody,
@@ -79,6 +82,7 @@ import {
   validateCreateGeofenceBody,
   validateUpdateGeofenceBody,
   validateGeofenceListQuery,
+  validateGeofenceHistoryQuery,
 } from './validate.js';
 
 export const emergencyRouter = Router();
@@ -378,6 +382,27 @@ emergencyRouter.post('/locations', requireAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /emergency/locations/latest — the elderly user, or a family member with
+// an active link and can_view_location = true. Phase 3 step 3's "use their
+// last known location" zone-centre flow (see GeofenceFormScreen): a family
+// member's own device position is never a stand-in for the elderly user's,
+// so this reads the elderly user's most recent stored reading instead of
+// anything captured on the caller's own phone.
+// ---------------------------------------------------------------------------
+
+emergencyRouter.get('/locations/latest', requireAuth, async (req, res) => {
+  const { elderlyUserId } = validateGeofenceListQuery(req.query);
+
+  requireElderlyUserId(req, elderlyUserId);
+  const userId = req.user.role === 'elderly' ? req.user.id : elderlyUserId;
+
+  await requireLocationViewPermission(req, userId);
+
+  const row = await findLatestLocation(userId);
+  res.json({ status: 'ok', location: row ? toPublicLocation(row) : null });
+});
+
+// ---------------------------------------------------------------------------
 // POST /emergency/device-tokens — no role check, same reasoning as the two
 // endpoints above: scoped to the caller's own account.
 // ---------------------------------------------------------------------------
@@ -502,9 +527,16 @@ emergencyRouter.delete('/contacts/:id', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 
 async function requireGeofenceViewPermission(req, elderlyUserId) {
-  const permitted = await hasViewGeofencesPermission(req.user.id, elderlyUserId);
+  const permitted = await hasViewLocationPermission(req.user.id, elderlyUserId);
   if (!permitted) {
     throw forbidden('not_permitted', 'You are not permitted to view safe zones for this account.');
+  }
+}
+
+async function requireLocationViewPermission(req, elderlyUserId) {
+  const permitted = await hasViewLocationPermission(req.user.id, elderlyUserId);
+  if (!permitted) {
+    throw forbidden('not_permitted', 'You are not permitted to view location data for this account.');
   }
 }
 
@@ -562,4 +594,52 @@ emergencyRouter.delete('/geofences/:id', requireAuth, async (req, res) => {
 
   const updated = await deactivateGeofence(id);
   res.json({ status: 'ok', geofence: toPublicGeofence(updated) });
+});
+
+// ---------------------------------------------------------------------------
+// GET /emergency/geofences/:id/history — same read permission as the zone
+// itself. Aggregates recent `locations` rows against this zone's circle
+// server-side rather than returning the raw trail: the caller needs "have
+// they been inside this zone lately," not a location-by-location export.
+// Feeds the sanity-check panel shown right after a zone is created (and
+// reachable later from the zone's card) — see GeofenceFormScreen/BUILD_LOG.md.
+// ---------------------------------------------------------------------------
+
+emergencyRouter.get('/geofences/:id/history', requireAuth, async (req, res) => {
+  const id = requireGeofenceId(req);
+  const { days } = validateGeofenceHistoryQuery(req.query);
+
+  const existing = await findGeofenceById(id);
+  if (!existing || !existing.is_active) throw notFound('geofence_not_found', 'No safe zone with that id.');
+
+  await requireGeofenceViewPermission(req, existing.user_id);
+
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const readings = await listLocationsSince(existing.user_id, since);
+
+  const centerLat = Number(existing.center_latitude);
+  const centerLon = Number(existing.center_longitude);
+  const radius = existing.radius_meters;
+  const sampleCount = readings.length;
+
+  let insideCount = 0;
+  let currentlyInside = null;
+  for (const reading of readings) {
+    const distance = haversineMeters(Number(reading.latitude), Number(reading.longitude), centerLat, centerLon);
+    currentlyInside = classify(distance, radius) === 'inside';
+    if (currentlyInside) insideCount += 1;
+  }
+
+  res.json({
+    status: 'ok',
+    history: {
+      days,
+      sampleCount,
+      insideCount,
+      percentInside: sampleCount > 0 ? Math.round((insideCount / sampleCount) * 100) : null,
+      currentlyInside,
+      oldestSampleAt: sampleCount > 0 ? readings[0].recorded_at : null,
+      newestSampleAt: sampleCount > 0 ? readings[sampleCount - 1].recorded_at : null,
+    },
+  });
 });

@@ -133,6 +133,7 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `GET` | `/emergency/family/alerts` | Bearer + `family` | Active alerts for elderly users the caller is linked to |
 | `GET` | `/emergency/family/alerts/history` | Bearer + `family` | Resolved/cancelled alerts from the last 7 days, same linked users |
 | `POST` | `/emergency/locations` | Bearer | Record one GPS reading |
+| `GET` | `/emergency/locations/latest` | Bearer | Most recent reading for an elderly user |
 | `POST` | `/emergency/device-tokens` | Bearer | Register this device for push notifications |
 | `POST` | `/emergency/ambulance/bookings` | Bearer | Request an emergency ambulance |
 | `GET` | `/emergency/ambulance/bookings/active` | Bearer | Get current active ambulance booking |
@@ -157,6 +158,7 @@ The default country is configuration (`DEFAULT_CALLING_CODE`, `DEFAULT_NATIONAL_
 | `GET` | `/emergency/geofences` | Bearer | List zones for an elderly user |
 | `PATCH` | `/emergency/geofences/:id` | Bearer | Edit a zone |
 | `DELETE` | `/emergency/geofences/:id` | Bearer | Soft-delete a zone |
+| `GET` | `/emergency/geofences/:id/history` | Bearer | Recent inside/outside tally for one zone |
 
 ---
 
@@ -1496,6 +1498,74 @@ Any of `POST`'s content fields, any subset — at least one required.
 
 ---
 
+### `GET /emergency/geofences/:id/history`
+
+Recent inside/outside tally for one zone — the sanity check shown right after creating a zone ("you've been inside this zone for the last 3 days"), and reachable again later. Aggregated server-side from `locations` rows against this zone's circle; never returns the raw location trail itself.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `days` | no | Positive whole number, capped at 30. Default `3` |
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "history": {
+    "days": 3,
+    "sampleCount": 42,
+    "insideCount": 39,
+    "percentInside": 93,
+    "currentlyInside": true,
+    "oldestSampleAt": "2026-08-26T09:00:00.000Z",
+    "newestSampleAt": "2026-08-29T08:45:00.000Z"
+  }
+}
+```
+
+`sampleCount: 0` means no `locations` rows exist in the requested window — `percentInside` and `currentlyInside` are both `null` in that case, not `0`/`false`; the client shows "not enough recent location data yet," not a false reading of "never inside."
+
+**Errors:** `400 validation_failed` (`days` malformed), `403 not_permitted` (same gate as reading the zone itself), `404 geofence_not_found`.
+
+---
+
+### `GET /emergency/locations/latest`
+
+Most recent `locations` row for an elderly user, or `null` if they have none yet. Same permission gate as reading their geofences — a family member's own device position is never a stand-in for the elderly user's, so this is how the "use their last known location" zone-centre flow (Phase 3 step 3) gets a real point to work from instead of the caller's own GPS.
+
+**Query parameters**
+
+| Field | Required | Rules |
+|---|---|---|
+| `elderlyUserId` | required only if the caller is not the elderly user | |
+
+**Response `200`**
+
+```json
+{
+  "status": "ok",
+  "location": {
+    "id": "9b2e6f3a-...",
+    "userId": "2e4fe1ff-...",
+    "latitude": "12.971600",
+    "longitude": "77.594600",
+    "accuracyMeters": "11.00",
+    "batteryLevel": 82,
+    "source": "background_task",
+    "recordedAt": "2026-08-29T08:45:00.000Z",
+    "createdAt": "2026-08-29T08:45:03.000Z"
+  }
+}
+```
+
+`location: null` when nothing has been recorded for that user yet — the client blocks zone creation from this path rather than guessing a centre.
+
+**Errors:** `400 validation_failed` (missing `elderlyUserId` for a non-elderly caller), `403 not_permitted` (lacks `canViewLocation` on an active link).
+
+---
+
 ## Known limitations
 
 **Pre-registration invites do not work.** `POST /family/invites` can only invite someone who has already registered an account — the invitee is looked up by phone, and an unregistered number returns `404 invitee_not_registered`. For real users this is the common case, not an edge case: a daughter installs the app for her mother, then wants to invite a brother who has nothing installed yet. Today he has to register first, then be invited. Building pre-registration invites (an invite record keyed on a phone number rather than a user id, resolved and turned into a real `family_links` row the moment that phone number registers) is a real feature, not a quick fix — it needs its own table or a nullable `family_user_id`, a way to notify the inviter once the invite resolves, and a decision on how long an unclaimed invite stays valid. Not attempted here.
@@ -1522,6 +1592,6 @@ Everything below is planned but does not exist. Do not code against it — it wi
 | Owner-tier family member editing another family member's permissions (`PATCH /family/links/:id` is elderly-only today) | 1 | Sree |
 | On-device (OS-level) geofencing for instant detection — today's check runs server-side on each location write, bounded by tracking cadence | 3 | Sree |
 
-**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above. `POST /family/invites`, `POST /family/invites/:id/accept`, `POST /family/invites/:id/decline`, `POST /family/links/:id/revoke`, `GET /family/links`, `POST /family/links/:id/emergency-contact`, `PATCH /family/links/:id` — see "Family Links" above. `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id` — see "Emergency Contacts" above. `POST /emergency/geofences`, `GET /emergency/geofences`, `PATCH /emergency/geofences/:id`, `DELETE /emergency/geofences/:id`, and server-side breach detection with auto-resolve-on-return — see "Geofencing" above. The family broadcast push tier — see "Notification channels and escalation" above.
+**Done as of this version:** `POST /emergency/alerts`, `GET /emergency/alerts`, `POST /emergency/alerts/:id/cancel`, `POST /emergency/alerts/:id/resolve`, `POST /emergency/alerts/:id/acknowledge`, `PATCH /emergency/alerts/:id/location`, `GET /emergency/family/alerts`, `GET /emergency/family/alerts/history`, `POST /emergency/locations`, `POST /emergency/device-tokens` — see the "Emergency alerts" and "Notification channels and escalation" sections above. `POST /family/invites`, `POST /family/invites/:id/accept`, `POST /family/invites/:id/decline`, `POST /family/links/:id/revoke`, `GET /family/links`, `POST /family/links/:id/emergency-contact`, `PATCH /family/links/:id` — see "Family Links" above. `POST /emergency/contacts`, `GET /emergency/contacts`, `PATCH /emergency/contacts/:id`, `DELETE /emergency/contacts/:id` — see "Emergency Contacts" above. `POST /emergency/geofences`, `GET /emergency/geofences`, `PATCH /emergency/geofences/:id`, `DELETE /emergency/geofences/:id`, `GET /emergency/geofences/:id/history`, `GET /emergency/locations/latest`, and server-side breach detection with auto-resolve-on-return — see "Geofencing" above. The family broadcast push tier — see "Notification channels and escalation" above.
 
 `family_links` and `emergency_contacts` rows both must still be created directly (no management endpoints for either yet) — same situation, same reason: nothing in this step needed one, so nothing was built ahead of being asked for. See `backend/scripts/seed-test-users.js` for how development data gets in either table today.

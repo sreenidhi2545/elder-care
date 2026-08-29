@@ -231,12 +231,14 @@ export async function hasManageContactsPermission(actorUserId, elderlyUserId) {
  * current name.
  */
 /**
- * Read access to an elderly user's geofences (Phase 3 step 3): the elderly
- * user themselves, or a family member with an active link and
- * can_view_location = true — a safe zone is location data, gated the same
- * way any other location data already is.
+ * Read access to an elderly user's location data: the elderly user
+ * themselves, or a family member with an active link and
+ * can_view_location = true. Backs GET /emergency/geofences (a safe zone is
+ * location data, gated the same way any other location data already is) and
+ * GET /emergency/locations/latest (Phase 3 step 3's "last known location"
+ * zone-centre flow).
  */
-export async function hasViewGeofencesPermission(actorUserId, elderlyUserId) {
+export async function hasViewLocationPermission(actorUserId, elderlyUserId) {
   if (actorUserId === elderlyUserId) return true;
   const link = await findActiveLink(actorUserId, elderlyUserId);
   return !!link && link.can_view_location === true;

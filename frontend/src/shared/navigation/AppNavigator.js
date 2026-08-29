@@ -17,6 +17,8 @@ import { DisasterDetailScreen } from '../../emergency/screens/DisasterDetailScre
 import { ResponseCenterScreen } from '../../emergency/screens/ResponseCenterScreen';
 import { FallDetectionScreen } from '../../emergency/screens/FallDetectionScreen';
 import { EmergencyContactsScreen } from '../../emergency/screens/EmergencyContactsScreen';
+import { GeofencesScreen } from '../../emergency/screens/GeofencesScreen';
+import { GeofenceFormScreen } from '../../emergency/screens/GeofenceFormScreen';
 import { ManageFamilyScreen } from '../../family/screens/ManageFamilyScreen';
 import { FamilyLinksScreen } from '../../family/screens/FamilyLinksScreen';
 import { useAuth } from '../auth/AuthContext';
@@ -38,6 +40,8 @@ function ElderlyNavigator() {
       <Stack.Screen name="FallDetection" component={FallDetectionScreen} />
       <Stack.Screen name="ManageFamily" component={ManageFamilyScreen} />
       <Stack.Screen name="EmergencyContacts" component={EmergencyContactsScreen} />
+      <Stack.Screen name="Geofences" component={GeofencesScreen} />
+      <Stack.Screen name="GeofenceForm" component={GeofenceFormScreen} />
     </Stack.Navigator>
   );
 }
@@ -53,6 +57,8 @@ function FamilyNavigator() {
       <Stack.Screen name="ResponseCenter" component={ResponseCenterScreen} />
       <Stack.Screen name="FallDetection" component={FallDetectionScreen} />
       <Stack.Screen name="FamilyLinks" component={FamilyLinksScreen} />
+      <Stack.Screen name="Geofences" component={GeofencesScreen} />
+      <Stack.Screen name="GeofenceForm" component={GeofenceFormScreen} />
     </Stack.Navigator>
   );
 }

@@ -428,7 +428,12 @@ export function validateUpdateGeofenceBody(body = {}) {
   return result;
 }
 
-/** GET /emergency/geofences — elderlyUserId required only for a non-elderly caller. */
+/**
+ * GET /emergency/geofences and GET /emergency/locations/latest —
+ * elderlyUserId required only for a non-elderly caller. Same shape for both:
+ * neither takes anything beyond which elderly user's data is being asked
+ * for.
+ */
 export function validateGeofenceListQuery(query = {}) {
   const { elderlyUserId } = query;
 
@@ -442,6 +447,27 @@ export function validateGeofenceListQuery(query = {}) {
   }
 
   return { elderlyUserId: elderlyUserId ?? null };
+}
+
+const DEFAULT_HISTORY_DAYS = 3;
+const MAX_HISTORY_DAYS = 30;
+
+/** GET /emergency/geofences/:id/history — how many days back to tally. */
+export function validateGeofenceHistoryQuery(query = {}) {
+  const { days } = query;
+
+  const errors = fieldErrors([
+    { when: days !== undefined && (!/^\d+$/.test(String(days)) || Number(days) < 1),
+      field: 'days', message: 'days must be a positive whole number.' },
+  ]);
+
+  if (errors.length > 0) {
+    throw badRequest('validation_failed', 'One or more fields are invalid.', { details: errors });
+  }
+
+  return {
+    days: days === undefined ? DEFAULT_HISTORY_DAYS : Math.min(Number(days), MAX_HISTORY_DAYS),
+  };
 }
 
 /** POST /emergency/alerts/:id/cancel and /resolve share this body shape. */

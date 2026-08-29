@@ -514,6 +514,25 @@ export function ElderlyHomeScreen({ navigation }) {
                   onEnable={handleEnableTracking}
                   onDisable={handleDisableTracking}
                 />
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    styles.zonesCard,
+                    pressed && styles.actionCardPressed,
+                  ]}
+                  onPress={() => navigation.navigate('Geofences')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Safe Zones"
+                >
+                  <View style={[styles.cardIconBadge, { backgroundColor: '#ECFEFF' }]}>
+                    <Text style={styles.cardIconText}>📍</Text>
+                  </View>
+                  <View style={styles.cardTextContainer}>
+                    <Text style={[styles.cardTitle, { color: '#0E7490' }]}>Safe Zones</Text>
+                    <Text style={styles.cardSubtitle}>Get alerted if you leave or enter a place</Text>
+                  </View>
+                </Pressable>
               </View>
             </>
           )}
@@ -882,6 +901,10 @@ const styles = StyleSheet.create({
   contactsCard: {
     backgroundColor: '#FFF1F2',
     borderColor: '#BE123C',
+  },
+  zonesCard: {
+    backgroundColor: '#ECFEFF',
+    borderColor: '#0E7490',
   },
   cardIconBadge: {
     width: 46,
