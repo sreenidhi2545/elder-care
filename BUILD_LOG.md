@@ -1237,3 +1237,44 @@ This makes the fix correct regardless of how change 1 actually behaves on any gi
 ### Not yet verified
 
 No preview build has been produced against this specific fix. Once one is, it needs a real device check confirming `source = 'background_task'` rows land no closer than ~90s apart (or a genuine 75m move) under normal use, and a rough count of `POST /emergency/locations` calls per hour compared against the ~5s-interval baseline this entry measured.
+
+---
+
+## 2026-08-29 — Near-miss: a fall alert sent with no GPS fix was rejected outright
+
+**Found during a full application audit** (endpoint/screen coverage, request-shape matching, dead-end flows, authorization) requested specifically to read the code rather than trust this log. Confirmed live before touching anything, then fixed and re-verified live.
+
+### The bug
+
+`frontend/src/emergency/api/alerts.js`'s `createFallAlert` built its request body as:
+
+```js
+latitude: location?.latitude ?? null,
+longitude: location?.longitude ?? null,
+```
+
+When `captureCurrentLocation()` fails — indoors, GPS off, permission denied, timed out — `FallDetectionScreen.js` passes `location: null` into `createFallAlert` on both the manual "I FELL" path and the automatic 10-second-countdown path, by design: a missing fix must never block sending help. But sending literal `null` for `latitude`/`longitude`, rather than omitting the keys, is not the same thing over the wire — `JSON.stringify` keeps a `null`-valued key and drops an `undefined`-valued one. The backend's `coordinateErrors` (`backend/emergency/validate.js`, shared by the SOS and fall-alert bodies) only ever recognised `latitude === undefined` as "not provided." A `null` fell through to the "must be a number between -90 and 90" check, which `null` fails, and the whole request was rejected with `400 validation_failed`.
+
+`createSosAlert`, three functions above it in the same file, does the equivalent conversion correctly (`?? undefined`) — this was an isolated one-line regression in `createFallAlert`, not a pattern repeated elsewhere in that file. Reproduced against the running backend before any fix: `POST /emergency/alerts/fall` with `{ latitude: null, longitude: null }` → `400`, `details` naming both fields.
+
+**Why this one matters more than an ordinary validation bug:** the no-GPS case isn't an edge case for this feature, it's a normal one — a fall serious enough to trigger the sensor heuristics or prompt someone to press "I FELL" is exactly the situation where being indoors, having a weak fix, or the phone having lost GPS lock is plausible. The fallback path that exists specifically to make sure a missing location never blocks the alert was the one thing silently defeating it.
+
+### Fix — belt and braces on both sides, not just the one that broke
+
+1. **Client** (`emergency/api/alerts.js`): `createFallAlert` now converts a missing coordinate to `?? undefined`, matching `createSosAlert` and `attachAlertLocation` in the same file — the field is omitted from the request entirely, same as every other optional-and-absent field in this app.
+2. **Validator** (`emergency/validate.js`): `coordinateErrors` now treats `null` and `undefined` identically as "not provided" (a new `isMissing` helper), rather than only recognising `undefined`. This is deliberately redundant with fix 1 — the client no longer sends `null` for these fields, but nothing stops a future caller (this endpoint, or the geofence/locations endpoints that share the same function) from making the same mistake, and the validator is the one place that would catch it regardless of which client got it wrong.
+
+### Verified live
+
+Backend restarted with both changes, exercised directly against `POST /emergency/alerts/fall` and `POST /emergency/alerts`, one fresh test account per case to avoid the one-active-alert-at-a-time conflict:
+
+| Case | Result |
+|---|---|
+| Fall alert, explicit `{ latitude: null, longitude: null }` | `201` (previously `400`) |
+| Fall alert, coordinates omitted entirely (what the client now actually sends) | `201` |
+| Fall alert, real coordinates | `201` |
+| SOS, no body at all | `201` — unaffected |
+| SOS, real coordinates | `201` — unaffected |
+| `POST /emergency/locations` (coordinates *required* there) with coordinates missing | still `400 validation_failed` — confirms the widened "not provided" check didn't loosen the required case |
+
+Test accounts deleted afterward.

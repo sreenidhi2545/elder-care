@@ -65,8 +65,8 @@ export function createFallAlert(location, message) {
   return apiRequest('/emergency/alerts/fall', {
     method: 'POST',
     body: {
-      latitude: location?.latitude ?? null,
-      longitude: location?.longitude ?? null,
+      latitude: location?.latitude ?? undefined,
+      longitude: location?.longitude ?? undefined,
       message: message || undefined,
     },
   });

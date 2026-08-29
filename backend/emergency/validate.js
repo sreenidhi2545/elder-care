@@ -26,16 +26,27 @@ function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+// `null` and `undefined` are both "not provided" here — a caller that omits
+// a field and one that explicitly sends `null` for it mean the same thing.
+// Only `latitude === undefined` used to be recognised, which meant a client
+// sending `{ latitude: null, longitude: null }` (as opposed to leaving the
+// keys out) fell through to the "must be a number" checks below and got
+// rejected. That is exactly what happened to a fall alert sent with no GPS
+// fix — see BUILD_LOG.md.
+function isMissing(value) {
+  return value === undefined || value === null;
+}
+
 /** Shared by the SOS body and the locations endpoint — same column, same rules. */
 function coordinateErrors(latitude, longitude, { required }) {
-  if (!required && latitude === undefined && longitude === undefined) return [];
+  if (!required && isMissing(latitude) && isMissing(longitude)) return [];
 
   return fieldErrors([
-    { when: latitude === undefined || longitude === undefined,
+    { when: isMissing(latitude) || isMissing(longitude),
       field: 'latitude', message: 'latitude and longitude must be sent together.' },
-    { when: latitude !== undefined && (!isFiniteNumber(latitude) || latitude < -90 || latitude > 90),
+    { when: !isMissing(latitude) && (!isFiniteNumber(latitude) || latitude < -90 || latitude > 90),
       field: 'latitude', message: 'Latitude must be a number between -90 and 90.' },
-    { when: longitude !== undefined && (!isFiniteNumber(longitude) || longitude < -180 || longitude > 180),
+    { when: !isMissing(longitude) && (!isFiniteNumber(longitude) || longitude < -180 || longitude > 180),
       field: 'longitude', message: 'Longitude must be a number between -180 and 180.' },
   ]);
 }
