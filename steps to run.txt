@@ -1,0 +1,8 @@
+frontend
+cd .\elder-care\frontend
+npx expo start --go -c
+
+backend
+
+cd .\elder-care\backend
+npm start
