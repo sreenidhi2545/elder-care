@@ -19,7 +19,7 @@
 // location trail later with nothing pointing at why.
 // ============================================================================
 
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 
 const QUEUE_FILE = `${FileSystem.documentDirectory}eldercare-location-queue.json`;
 const MAX_QUEUE_SIZE = 2000;

@@ -17,7 +17,7 @@
 
 import * as TaskManager from 'expo-task-manager';
 import * as Battery from 'expo-battery';
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 
 import { BACKGROUND_LOCATION_TASK, TIME_INTERVAL_MS, DISTANCE_INTERVAL_METERS } from './backgroundLocationTaskName';
 import { enqueueLocation } from './locationQueue';
